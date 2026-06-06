@@ -78,11 +78,13 @@ Maintain `ROUND` (start 1) and `THREAD_ID` (empty until round 1 returns).
 codex exec -s read-only --json \
   -o /tmp/codex-verdict.txt \
   "$(cat REVIEW_PROMPT)" \
-  2>/dev/null | grep '"type":"thread.started"'
+  < /dev/null 2>/dev/null | grep '"type":"thread.started"'
 ```
 Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that is `THREAD_ID`. The critique text lands in `/tmp/codex-verdict.txt` (Codex's last message). Read that file.
 
 > Note: stderr carries cosmetic MCP/auth noise on some setups — `2>/dev/null` is intentional. Confirm success by the presence of the verdict file + a `thread.started` line. If neither appears, the run failed (auth/model) — stop and tell the user.
+>
+> **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF. Required on the resume call below too.
 
 **Rounds 2..MAX** (resume the SAME session — Codex remembers its earlier critiques, won't re-litigate settled points):
 
@@ -92,7 +94,7 @@ Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line �
 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
   -o /tmp/codex-verdict.txt \
   "I revised the plan. Re-review PLAN.md. Same rules. End with VERDICT: APPROVED or VERDICT: REVISE." \
-  2>/dev/null >/dev/null
+  < /dev/null 2>/dev/null >/dev/null
 ```
 
 Both `codex exec` and `codex exec resume` support `--json` (stream → parse `thread_id` first round) and `-o/--output-last-message` (verdict capture).

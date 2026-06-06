@@ -156,9 +156,9 @@ Invoked with e.g. `rounds=3` → use it. Echo resolved values first.
 ### Round 1 — fresh session (capture `thread_id`)
 ```bash
 codex exec -s read-only --json -o /tmp/codex-verdict.txt "$(cat REVIEW_PROMPT)" \
-  2>/dev/null | grep '"type":"thread.started"'
+  < /dev/null 2>/dev/null | grep '"type":"thread.started"'
 ```
-Parse `thread_id` from the `thread.started` line. Critique in `/tmp/codex-verdict.txt`. No verdict file + no `thread.started` = failed run (auth/model) → stop, tell the user. `2>/dev/null` hides cosmetic MCP/auth noise.
+Parse `thread_id` from the `thread.started` line. Critique in `/tmp/codex-verdict.txt`. No verdict file + no `thread.started` = failed run (auth/model) → stop, tell the user. `2>/dev/null` hides cosmetic MCP/auth noise. **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF.
 
 ### Rounds 2..MAX — resume SAME session
 ```bash
@@ -168,8 +168,9 @@ Parse `thread_id` from the `thread.started` line. Critique in `/tmp/codex-verdic
 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
   -o /tmp/codex-verdict.txt \
   "I revised the plan. Re-review PLAN.md — check prior findings + flag anything new. End with VERDICT: APPROVED or VERDICT: REVISE." \
-  2>/dev/null >/dev/null
+  < /dev/null 2>/dev/null >/dev/null
 ```
+The `< /dev/null` redirect is required on the resume call too — same non-interactive stdin hang as Round 1.
 
 ### Each round
 1. Read verdict file; append `## Round <n> — Codex` + critique to `LOG_FILE`.
