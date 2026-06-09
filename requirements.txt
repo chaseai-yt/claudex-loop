@@ -1,0 +1,8 @@
+anthropic
+fastapi
+uvicorn[standard]
+pydantic
+eval_type_backport
+python-dotenv
+pytest
+httpx

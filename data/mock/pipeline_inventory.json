@@ -1,0 +1,50 @@
+{
+  "C9300-48P-A=": {
+    "available_qty": 25,
+    "spare_list_price": 5776.80,
+    "spare_sku_discount": 0.1035,
+    "warehouse_locations": ["PHX"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "C9300-24P-A=": {
+    "available_qty": 12,
+    "spare_list_price": 3200.00,
+    "spare_sku_discount": 0.10,
+    "warehouse_locations": ["PHX", "DAL"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "C9300-48T-A=": {
+    "available_qty": 8,
+    "spare_list_price": 4900.00,
+    "spare_sku_discount": 0.10,
+    "warehouse_locations": ["PHX"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "C9300-DNA-E-48=": {
+    "available_qty": 999,
+    "spare_list_price": 0.0,
+    "spare_sku_discount": 0.0,
+    "warehouse_locations": ["PHX"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "C9200CX-DNA-E-12=": {
+    "available_qty": 999,
+    "spare_list_price": 0.0,
+    "spare_sku_discount": 0.0,
+    "warehouse_locations": ["PHX"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "CSC-CAB-TA-NA=": {
+    "available_qty": 6,
+    "spare_list_price": 45.00,
+    "spare_sku_discount": 0.05,
+    "warehouse_locations": ["PHX", "ATL"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  }
+}

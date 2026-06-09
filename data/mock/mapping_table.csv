@@ -1,0 +1,11 @@
+id,cto_sku,spare_sku,approved_by,approved_at,cisco_ref,is_strict_match,version,effective_date,expiry_date,superseded_by,is_active
+map-0001,WS-C2960X-48FPD-L,WS-C2960X-48FPD-L=,jane.doe@tdsynnex.com,2025-01-15T09:00:00,CCO-2960X-FPD,true,1,2025-01-15,,,true
+map-0002,C9200-48P-E,C9200-48P-E=,jane.doe@tdsynnex.com,2025-01-15T09:00:00,CCO-9200-48P,true,1,2025-01-15,,,true
+map-0003,ASR1001-X,ASR1001-X=,john.smith@tdsynnex.com,2025-02-01T09:00:00,CCO-ASR1001X,true,1,2025-02-01,,,true
+map-0004,C9300-48P-E,C9300-48P-E=,john.smith@tdsynnex.com,2025-02-01T09:00:00,CCO-9300-48P,false,1,2025-02-01,,,true
+map-0005,ISR4451-X/K9,ISR4451-X/K9=,ops.team@tdsynnex.com,2025-03-01T09:00:00,CCO-ISR4451X,true,1,2025-03-01,,,true
+map-0006,C9500-48Y4C-E,C9500-48Y4C-E=,ops.team@tdsynnex.com,2025-03-01T09:00:00,CCO-9500-48Y,false,1,2025-03-01,,,true
+map-0007,NCS-5501-SE,NCS-5501-SE=,senior.eng@tdsynnex.com,2025-04-01T09:00:00,CCO-NCS5501SE,true,1,2025-04-01,,,true
+map-0008,C8300-1N1S-4T2X,C8300-1N1S-4T2X=,senior.eng@tdsynnex.com,2025-04-01T09:00:00,CCO-C8300-1N,false,1,2025-04-01,,,true
+map-0009,WS-C3850-48F-L,WS-C3850-48F-L=,legacy.team@tdsynnex.com,2025-01-01T09:00:00,CCO-3850-48F,false,1,2025-01-01,2026-12-31,,true
+map-0010,C9407R,C9407R=,jane.doe@tdsynnex.com,2025-05-01T09:00:00,CCO-C9407R,true,1,2025-05-01,,,true

@@ -1,0 +1,62 @@
+{
+  "WS-C2960X-48FPD-L=": {
+    "available_qty": 45,
+    "warehouse_locations": ["PHX-A1-R3", "DAL-B2-R7"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "C9200-48P-E=": {
+    "available_qty": 12,
+    "warehouse_locations": ["PHX-A2-R1"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "ASR1001-X=": {
+    "available_qty": 0,
+    "warehouse_locations": [],
+    "allocation_status": "OUT_OF_STOCK",
+    "backorder_status": true
+  },
+  "C9300-48P-E=": {
+    "available_qty": 30,
+    "warehouse_locations": ["DAL-C1-R4", "ATL-A3-R2", "PHX-A1-R5"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "ISR4451-X/K9=": {
+    "available_qty": 3,
+    "warehouse_locations": ["DAL-B1-R2"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "C9500-48Y4C-E=": {
+    "available_qty": 0,
+    "warehouse_locations": [],
+    "allocation_status": "ALLOCATED",
+    "backorder_status": true
+  },
+  "NCS-5501-SE=": {
+    "available_qty": 7,
+    "warehouse_locations": ["PHX-D1-R1"],
+    "allocation_status": "RESERVED",
+    "backorder_status": false
+  },
+  "C8300-1N1S-4T2X=": {
+    "available_qty": 20,
+    "warehouse_locations": ["DAL-C2-R8", "PHX-A3-R3"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "WS-C3850-48F-L=": {
+    "available_qty": 6,
+    "warehouse_locations": ["ATL-B2-R5"],
+    "allocation_status": "AVAILABLE",
+    "backorder_status": false
+  },
+  "C9407R=": {
+    "available_qty": 0,
+    "warehouse_locations": [],
+    "allocation_status": "OUT_OF_STOCK",
+    "backorder_status": true
+  }
+}
