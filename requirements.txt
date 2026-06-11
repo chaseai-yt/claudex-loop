@@ -1,0 +1,10 @@
+anthropic>=0.106.0,<1.0
+fastapi>=0.136.0,<1.0
+uvicorn[standard]>=0.49.0,<1.0
+pydantic>=2.13.0,<3.0
+eval_type_backport
+python-dotenv>=1.2.0,<2.0
+pytest>=9.0.0,<10.0
+httpx>=0.28.0,<1.0
+xlrd>=1.2,<2.0
+claude-agent-sdk>=0.1.0

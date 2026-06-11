@@ -1,0 +1,60 @@
+================================================================================
+CISCO SYSTEMS — PARTNER QUOTE DOCUMENT
+================================================================================
+Quote ID     : QT-2025-084392
+Cisco Deal ID: CDL-990-2025-04421
+Customer     : Pacific Northwest Healthcare Network
+Partner      : TD SYNNEX (NA)
+Prepared By  : Cisco Inside Sales — Seattle
+Date         : 2025-11-01
+Expiry       : 2025-12-01
+Currency     : USD
+================================================================================
+
+--- BUILD GROUP 1 (Access Layer – Campus South Wing) ---
+
+Line 1.0   WS-C2960X-48FPD-L       Catalyst 2960-X 48 GigE PoE 740W, 2x10G SFP+         Qty: 10   CTO: Yes
+Line 1.1   WS-C2960X-48FPD-L-SSD   SSD Upg for 2960-X (optional add-on)                  Qty: 10   CTO: Yes
+Line 1.2   GLC-SX-MMD              1000BASE-SX SFP, MMF, 850nm, DOM                       Qty: 40   CTO: No
+Line 1.3   CAB-SPWR-30CM           StackPower Cable 30cm                                  Qty: 9    CTO: No
+Line 1.4   C2960X-STACK            Catalyst 2960-X FlexStack Plus Stacking Module         Qty: 9    CTO: No
+Line 1.5   PWR-C2-250WAC           250W AC Config 2 Power Supply                          Qty: 10   CTO: No
+           Spare equiv: PWR-C2-250WAC=
+
+--- BUILD GROUP 2 (Distribution – Core Node A) ---
+
+Line 2.0   C9300-48P-E             Catalyst 9300 48-port PoE+ Network Essentials          Qty: 4    CTO: Yes
+Line 2.1   C9300-NM-8X             8x10GE Network Module for Cat 9300                     Qty: 4    CTO: No
+Line 2.2   C9300-DNA-E-48-5Y       5-Year DNA Essentials License, 48-port                 Qty: 4    CTO: No
+Line 2.3   SFP-10G-SR              10GBASE-SR SFP+ Module                                 Qty: 16   CTO: No
+Line 2.4   C9300-48P-E             Catalyst 9300 48-port (HOT STANDBY SPARE)              Qty: 1    CTO: Yes
+           Note: Standby unit, same BG as primary
+Line 2.5   CAB-TA-NA               AC Power Cord (North America), C15                     Qty: 5    CTO: No
+Line 2.6   STACK-T1-50CM           50CM Type 1 Stacking Cable                             Qty: 4    CTO: No
+Line 2.7   C9300-DNA-E-48-5Y       DNA License duplicate (data entry error)               Qty: 4    CTO: No
+           NOTE: Duplicate of Line 2.2 — quantities should be aggregated
+
+--- BUILD GROUP 3 (WAN Edge / Service Provider Uplink) ---
+
+Line 3.0   ASR1001-X               ASR 1001-X Router, 6x1GE, 2x10GE, 2.5G Base Bandwidth Qty: 2    CTO: Yes
+Line 3.1   ASR1000-ESP10-N         ASR1000 Embedded Services Processor, 10G               Qty: 2    CTO: No
+Line 3.2   ASR1001-X-DNS-SVC       ASR 1001-X DNS Service Bundle                         Qty: 2    CTO: No
+Line 3.3   SFP-10G-LR              10GBASE-LR SFP+ Module, 1310nm                        Qty: 8    CTO: No
+Line 3.4   ASR1001-HDD             ASR1001 Hard Disk Drive                                Qty: 2    CTO: No
+Line 3.5   FLASR1001-FW            ASR1001 Advanced Enterprise Firewall License            Qty: 2    CTO: No
+           Spare equiv: ASR1001-X=
+
+================================================================================
+PRICING NOTES
+================================================================================
+All prices are indicative resale. Final pricing subject to TD SYNNEX deal desk
+approval. Net30 payment terms. FOB shipping origin (Phoenix, AZ warehouse).
+
+Smartnet coverage: 3-year CON-3SNT recommended for Groups 1 & 2.
+Warranty: Standard Cisco 90-day hardware warranty applies.
+
+MANUAL REVIEW FLAG: Line 2.4 and Line 2.0 share the same SKU across two line
+positions within the same build group — validate aggregation intent with customer.
+================================================================================
+END OF QUOTE
+================================================================================
