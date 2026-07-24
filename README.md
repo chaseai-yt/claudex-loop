@@ -1,5 +1,7 @@
 # grill-me-codex
 
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
 **Two AI models harden your plan — then swap jobs to build it.** A family of Claude Code skills that close the two gaps in AI-assisted coding: the gap between *you and Claude* (do we agree on what to build?) and the gap between *Claude and the quality of what it produces* (is the plan actually correct — and how would you even know?).
 
 Act 1 grills **you** to lock the plan. Act 2 hands that plan to **OpenAI Codex** — a rival, cross-provider model — which adversarially tears it apart over several rounds until both models sign off. Act 3 (optional) flips the roles: **Codex writes the code** from the frozen plan while **Claude reviews the diff** like a contributor PR. Cross-model checks in both directions — nobody grades their own work.
