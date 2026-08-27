@@ -322,6 +322,13 @@ def run_review(p, args, plan_hash, user_content):
         print(output)
     print(f"{status} | findings: {count_findings(critique)} | plan-sha256: {plan_hash} "
           f"| reviewer: {p['name']}")
+    if args.append_log:
+        label = "fallback" if code == 0 else "fallback — INVALID ATTEMPT, does not count as a round"
+        entry = (f"\n## Round {args.round_no} — {p['model']} (via {p['name']}, {label})\n\n"
+                 f"_Status: {status} · plan SHA256 {plan_hash}_\n\n{critique}\n")
+        with io.open(args.append_log, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(entry)
+        print(f"Round appended to {args.append_log}")
     return code
 
 
@@ -385,6 +392,12 @@ def main():
                          "quota/credits — every skip is reported")
     ap.add_argument("--round", type=int, default=1, dest="round_no")
     ap.add_argument("--out", help="write the critique here (default: stdout)")
+    ap.add_argument("--append-log",
+                    help="append this round to the review log (e.g. PLAN-REVIEW-LOG.md) "
+                         "as '## Round <n> — <model> (via <reviewer>, fallback)' with the "
+                         "status line and the full critique — INVALID attempts are "
+                         "appended too, labeled as not counting. Findings never live "
+                         "only in a chat transcript.")
     ap.add_argument("--system-file",
                     help="file whose content replaces the built-in plan-review "
                          "system prompt — lets other gates (e.g. codex-verify) "

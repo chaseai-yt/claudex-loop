@@ -246,7 +246,7 @@ Opt-out: `inspect=off` at invocation or the user declining at Resolution. Skippi
 - The loop ALWAYS terminates at `MAX_ROUNDS`.
 - Claude is final arbiter on every REVISE — incorporate good critiques, reject bad ones *with a logged reason*. Don't cave to everything (defeats the cross-model check) and don't ignore it (defeats the point).
 - Code only after the user's final sign-off.
-- `LOG_FILE` is the deliverable — keep the whole argument.
+- `LOG_FILE` is the deliverable — keep the whole argument. **Findings ledger rule:** every reviewer output — Phase 2 rounds, a fallback round (valid or an INVALID attempt, labeled as such), an optional cold-read, the post-build inspection, any recheck, and every `codex-verify` pass — is appended to `LOG_FILE` **verbatim, at the moment it arrives**, followed by Claude's per-finding disposition (accepted → what changed / rejected → why). Nothing about a review lives only in the chat transcript; if it isn't in the log, it didn't happen. `scripts/fallback_review.py --append-log <LOG_FILE>` does this mechanically for fallback rounds.
 - `CONTEXT.md` stays a glossary only — never implementation details.
 
 ## What NOT to do

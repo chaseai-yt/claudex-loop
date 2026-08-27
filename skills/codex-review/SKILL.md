@@ -121,6 +121,7 @@ Both `codex exec` and `codex exec resume` support `--json` (stream → parse `th
 
 - Codex is read-only EVERY round — `-s read-only` for the first call, `-c sandbox_mode="read-only"` for every resume (resume has no `-s`). It never writes. If you're tempted to give it write access, stop — that's a different skill.
 - The loop ALWAYS terminates at `MAX_ROUNDS`. No unbounded recursion.
+- **Findings ledger:** every reviewer output — each Codex round, each fallback round (valid or an INVALID attempt, labeled as such), any cold-read — is appended to `LOG_FILE` verbatim when it arrives, followed by Claude's per-finding disposition (accepted → what changed / rejected → why). Nothing about a review lives only in the chat; `scripts/fallback_review.py --append-log <LOG_FILE>` does it mechanically for fallback rounds.
 - Claude is the final arbiter on every REVISE — incorporate good critiques, reject bad ones *with a reason logged*. Don't cave to Codex on everything (that defeats the cross-model check) and don't ignore it (that defeats the point).
 - Code only after human gate #2.
 - `LOG_FILE` is the deliverable — it tells the whole story of the argument. Keep it complete.

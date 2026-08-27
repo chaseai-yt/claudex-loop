@@ -134,6 +134,14 @@ Every fallback round is recorded as:
 ## Round <n> — <model> (via <reviewer>, fallback — plan-text only, no repo access)
 ```
 
+`scripts/fallback_review.py --append-log <LOG_FILE>` writes exactly this entry
+(header, status line with the plan hash, full critique) the moment the reply
+arrives — including **INVALID attempts**, labeled `INVALID ATTEMPT, does not
+count as a round`. A rejected reply is still evidence: it shows which model was
+tried, why it failed (truncation, missing verdict, rubber stamp), and what the
+user decided next. Claude then appends its per-finding dispositions under the
+entry, as for any Codex round. Findings never live only in the chat.
+
 and the resolution summary states which rounds ran on which reviewer. A final
 APPROVED that includes fallback rounds carries the note that it is weaker than
 a full-Codex run; for high-stakes plans, add a confirming Codex round after
