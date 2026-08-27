@@ -26,7 +26,7 @@ working directory if present). Reviewers are named profiles:
 
     CLAUDEX_REVIEWERS=lmstudio,openrouter          # chain order, first = default
     CLAUDEX_REVIEWER_LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-    CLAUDEX_REVIEWER_LMSTUDIO_MODEL=qwen/qwen3.6-35b-a3b
+    CLAUDEX_REVIEWER_LMSTUDIO_MODEL=qwen/qwen3.8-27b
     CLAUDEX_REVIEWER_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
     CLAUDEX_REVIEWER_OPENROUTER_MODEL=deepseek/deepseek-r1
     CLAUDEX_REVIEWER_OPENROUTER_API_KEY_ENV=OPENROUTER_API_KEY
@@ -123,20 +123,40 @@ def profile(name):
             f"{prefix}MODEL (env or .env). See .env.example.")
     api_key = get("API_KEY")
     key_env = get("API_KEY_ENV")
+    if api_key:
+        print(f"WARNING: {prefix}API_KEY holds the key inline — prefer "
+              f"{prefix}API_KEY_ENV pointing at a variable your secret manager "
+              "injects, so the key never sits in a file.")
     if not api_key and key_env:
         api_key = os.environ.get(key_env)
         if not api_key:
             raise SystemExit(
                 f"Reviewer '{name}': {prefix}API_KEY_ENV points at '{key_env}' "
                 "but that variable is empty. Refusing to call without the key.")
+    base_url = base_url.rstrip("/")
+    parts = urlsplit(base_url)
+    if (api_key and parts.scheme == "http"
+            and parts.hostname not in ("127.0.0.1", "localhost", "::1")):
+        raise SystemExit(
+            f"Reviewer '{name}': refusing to send a bearer key over plain http "
+            f"to non-local host {parts.hostname}. Use https.")
+
+    def num(suffix, default, cast):
+        raw = get(suffix, default)
+        try:
+            return cast(raw)
+        except (TypeError, ValueError):
+            raise SystemExit(
+                f"Reviewer '{name}': {prefix}{suffix}='{raw}' is not a number.")
+
     return {
         "name": name,
-        "base_url": base_url.rstrip("/"),
+        "base_url": base_url,
         "model": model,
         "api_key": api_key,
-        "temperature": float(get("TEMPERATURE", "0.7")),
-        "max_tokens": int(get("MAX_TOKENS", "8192")),
-        "timeout": int(get("TIMEOUT", "1800")),
+        "temperature": num("TEMPERATURE", "0.7", float),
+        "max_tokens": num("MAX_TOKENS", "8192", int),
+        "timeout": num("TIMEOUT", "1800", int),
     }
 
 
@@ -178,7 +198,10 @@ def preflight(p):
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             return False, f"auth rejected (HTTP {exc.code})"
-        # Some compat layers don't expose /models — reachable is good enough.
+        if exc.code in (402, 429):
+            return False, f"quota/payment exhausted (HTTP {exc.code})"
+        # Other codes (404/405 …): some compat layers don't expose /models —
+        # reachable is good enough.
     except (urllib.error.URLError, OSError, ValueError) as exc:
         return False, f"unreachable ({getattr(exc, 'reason', exc)})"
 
@@ -233,10 +256,11 @@ def run_review(p, args, plan_hash, user_content):
 
     Raises ProviderError on transport/HTTP failure so a chain can move on.
     """
+    system_prompt = read_text(args.system_file) if args.system_file else SYSTEM_PROMPT
     payload = json.dumps({
         "model": p["model"],
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": p["temperature"],
@@ -277,16 +301,47 @@ def run_review(p, args, plan_hash, user_content):
     else:
         print(output)
 
-    # Tolerate markdown decoration around the verdict line (**VERDICT: X**, etc.);
-    # if several appear, the LAST one counts.
-    matches = re.findall(r"^[\s*_`>#-]*VERDICT:\s*(APPROVED|REVISE)[\s*_`.!]*$",
-                         critique, flags=re.M)
-    if not matches:
+    # Markdown decoration around a verdict line is tolerated (**VERDICT: X**,
+    # etc.); if a verdict appears several times, the LAST occurrence counts.
+    DECOR = r"[\s*_`>#-]*"
+
+    def last_verdict(name, values):
+        rx = rf"^{DECOR}{re.escape(name)}:\s*({'|'.join(map(re.escape, values))})[\s*_`.!]*$"
+        found = re.findall(rx, critique, flags=re.M | re.I)
+        return found[-1].upper() if found else None
+
+    findings = count_findings(critique)
+    if args.require_verdicts:
+        # Custom grammar: every named verdict must appear; first value = pass.
+        results, missing, all_pass = [], [], True
+        for entry in args.require_verdicts.split(","):
+            name, _, vals = entry.strip().partition(":")
+            values = [v.strip() for v in vals.split("|") if v.strip()]
+            got = last_verdict(name.strip(), values)
+            if got is None:
+                missing.append(name.strip())
+                continue
+            results.append(f"{name.strip().upper()}: {got}")
+            if got != values[0].upper():
+                all_pass = False
+        if missing:
+            print(f"INVALID: missing verdict line(s) {missing} — "
+                  "do not record this as a round.")
+            return 3
+        print(f"{' | '.join(results)} | findings: {findings} "
+              f"| plan-sha256: {plan_hash} | reviewer: {p['name']}")
+        if args.round_no == 1 and all_pass and findings < args.min_findings:
+            print(f"INVALID: rubber-stamp suspicion — all verdicts passing in round 1 "
+                  f"with only {findings} finding(s) (< {args.min_findings}).")
+            return 3
+        return 0
+
+    verdict = last_verdict("VERDICT", ["APPROVED", "REVISE"])
+    if verdict is None:
         print("INVALID: no VERDICT line at the end of the reply — "
               "do not record this as a round.")
         return 3
-    verdict, findings = matches[-1], count_findings(critique)
-    print(f"VERDICT: {verdict} | findings: {findings} | plan-sha256: {plan_hash[:16]} "
+    print(f"VERDICT: {verdict} | findings: {findings} | plan-sha256: {plan_hash} "
           f"| reviewer: {p['name']}")
     if args.round_no == 1 and verdict == "APPROVED" and findings < args.min_findings:
         print(f"INVALID: rubber-stamp suspicion — APPROVED in round 1 with only "
@@ -308,6 +363,18 @@ def main():
                          "quota/credits — every skip is reported")
     ap.add_argument("--round", type=int, default=1, dest="round_no")
     ap.add_argument("--out", help="write the critique here (default: stdout)")
+    ap.add_argument("--system-file",
+                    help="file whose content replaces the built-in plan-review "
+                         "system prompt — lets other gates (e.g. codex-verify) "
+                         "reuse the transport/preflight/chain with their own prompt")
+    ap.add_argument("--require-verdicts",
+                    help="comma-list NAME:PASSVAL|OTHERVAL[|...] replacing the "
+                         "default 'VERDICT: APPROVED|REVISE' grammar, e.g. "
+                         "'DOD:COMPLETE|INCOMPLETE,QUALITY:ACCEPTABLE|REVISE,"
+                         "SECURITY:PASS|FAIL'. Every named verdict line must "
+                         "appear or the review is invalid (exit 3); the FIRST "
+                         "value of each entry counts as its passing value for "
+                         "the rubber-stamp gate")
     ap.add_argument("--min-findings", type=int,
                     default=int(os.environ.get("CLAUDEX_FALLBACK_MIN_FINDINGS", "3")),
                     help="round 1: an APPROVED with fewer numbered findings is "
@@ -380,6 +447,10 @@ def main():
             continue
 
         ok, detail = preflight(p)
+        if not ok and args.chain and detail.startswith("unreachable"):
+            # Transient network stumble gets one retry before the chain moves on.
+            print(f"CHAIN: preflight {name}: {detail} — retrying once ...")
+            ok, detail = preflight(p)
         print(f"{'CHAIN: ' if args.chain else ''}preflight {name}: "
               f"{'OK' if ok else 'UNAVAILABLE'} — {detail}")
         if not ok:

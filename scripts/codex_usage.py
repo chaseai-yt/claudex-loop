@@ -56,7 +56,7 @@ def find_latest_snapshot():
 
 
 def fmt_window(win, label):
-    if not isinstance(win, dict):
+    if not isinstance(win, dict) or win.get("used_percent") is None:
         return f"{label}: no data"
     used = win.get("used_percent")
     resets = win.get("resets_at")
@@ -93,9 +93,10 @@ def main():
             print(f"Credits: balance={credits.get('balance')}, unlimited={credits.get('unlimited')}")
 
     worst = max(
-        (w.get("used_percent") or 0.0)
-        for w in (snap.get("primary") or {}, snap.get("secondary") or {})
-        if isinstance(w, dict)
+        ((w.get("used_percent") or 0.0)
+         for w in (snap.get("primary") or {}, snap.get("secondary") or {})
+         if isinstance(w, dict)),
+        default=0.0,
     )
     if worst >= args.threshold:
         print(f"ERROR: Quota threshold reached ({worst:.0f} % >= {args.threshold:.0f} %) — "
