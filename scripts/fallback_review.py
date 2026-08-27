@@ -73,7 +73,9 @@ SYSTEM_PROMPT = (
     "of the plan and state what concretely goes wrong if the plan ships as-is, "
     "plus a one-line fix. You only see the text you are given — if a claim "
     "cannot be verified from the plan itself, flag it as unverified rather "
-    "than assuming it holds. End your reply with EXACTLY one line: "
+    "than assuming it holds. Do NOT reproduce, re-list or line-number the "
+    "material you were given — cite it by section or file:line and move on; "
+    "your output budget is for findings. End your reply with EXACTLY one line: "
     "'VERDICT: APPROVED' if the plan is sound enough to implement, or "
     "'VERDICT: REVISE' if it still has material problems."
 )
@@ -290,6 +292,14 @@ def run_review(p, args, plan_hash, user_content):
     critique = strip_thinking(msg.get("content") or "")
     if not critique and msg.get("reasoning_content"):
         critique = strip_thinking(msg["reasoning_content"])
+    finish = body["choices"][0].get("finish_reason")
+    if finish == "length":
+        # Seen in practice: a dense local model re-listed the inlined diff with
+        # line numbers and ran out of output budget before any verdict line.
+        print(f"WARNING: {p['name']} hit max_tokens ({p['max_tokens']}) — the reply "
+              "is truncated. Raise CLAUDEX_REVIEWER_<NAME>_MAX_TOKENS, shorten the "
+              "input, or pick a model that doesn't echo the material; the verdict "
+              "check below will (correctly) reject this round.")
 
     header = (f"# Reviewer: {p['model']} via {p['name']} (fallback — not the primary reviewer)\n"
               f"# Round: {args.round_no} | Plan SHA256: {plan_hash}\n\n")
