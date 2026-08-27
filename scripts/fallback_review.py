@@ -241,8 +241,13 @@ def strip_thinking(text):
 
 
 def count_findings(text):
-    """Count numbered findings (lines starting '1.' / '2)' etc.)."""
-    return len(set(re.findall(r"^\s*(\d{1,2})[.)]\s+\S", text, flags=re.M)))
+    """Count numbered findings (lines starting '1.' / '2)' etc.).
+
+    Every numbered line counts: multi-section reports restart numbering per
+    section, and de-duplicating by number would under-count them. The value
+    only feeds the rubber-stamp lower bound, so over-counting is harmless.
+    """
+    return len(re.findall(r"^\s*\d{1,2}[.)]\s+\S", text, flags=re.M))
 
 
 class ProviderError(Exception):
@@ -301,8 +306,13 @@ def run_review(p, args, plan_hash, user_content):
               "input, or pick a model that doesn't echo the material; the verdict "
               "check below will (correctly) reject this round.")
 
+    # Validate FIRST, write SECOND — the output file carries the verdict status
+    # in its header, so a reader who ignores the exit code cannot mistake an
+    # invalid review for a recorded round.
+    code, status = validate(critique, args, p)
     header = (f"# Reviewer: {p['model']} via {p['name']} (fallback — not the primary reviewer)\n"
-              f"# Round: {args.round_no} | Plan SHA256: {plan_hash}\n\n")
+              f"# Round: {args.round_no} | Plan SHA256: {plan_hash}\n"
+              f"# Status: {status}\n\n")
     output = header + critique + "\n"
     if args.out:
         with io.open(args.out, "w", encoding="utf-8", newline="\n") as fh:
@@ -310,9 +320,19 @@ def run_review(p, args, plan_hash, user_content):
         print(f"Review written: {args.out}")
     else:
         print(output)
+    print(f"{status} | findings: {count_findings(critique)} | plan-sha256: {plan_hash} "
+          f"| reviewer: {p['name']}")
+    return code
 
-    # Markdown decoration around a verdict line is tolerated (**VERDICT: X**,
-    # etc.); if a verdict appears several times, the LAST occurrence counts.
+
+def validate(critique, args, p):
+    """Apply the verdict grammar and the rubber-stamp gate.
+
+    Returns (exit_code, status_line): 0 with the verdict summary, or 3 with an
+    'INVALID: …' reason. Markdown decoration around a verdict line is
+    tolerated (**VERDICT: X**, etc.); if a verdict appears several times, the
+    LAST occurrence counts.
+    """
     DECOR = r"[\s*_`>#-]*"
 
     def last_verdict(name, values):
@@ -335,30 +355,22 @@ def run_review(p, args, plan_hash, user_content):
             if got != values[0].upper():
                 all_pass = False
         if missing:
-            print(f"INVALID: missing verdict line(s) {missing} — "
-                  "do not record this as a round.")
-            return 3
-        print(f"{' | '.join(results)} | findings: {findings} "
-              f"| plan-sha256: {plan_hash} | reviewer: {p['name']}")
+            return 3, (f"INVALID: missing verdict line(s) {missing} — "
+                       "do not record this as a round")
         if args.round_no == 1 and all_pass and findings < args.min_findings:
-            print(f"INVALID: rubber-stamp suspicion — all verdicts passing in round 1 "
-                  f"with only {findings} finding(s) (< {args.min_findings}).")
-            return 3
-        return 0
+            return 3, (f"INVALID: rubber-stamp suspicion — all verdicts passing in "
+                       f"round 1 with only {findings} finding(s) (< {args.min_findings})")
+        return 0, " | ".join(results)
 
     verdict = last_verdict("VERDICT", ["APPROVED", "REVISE"])
     if verdict is None:
-        print("INVALID: no VERDICT line at the end of the reply — "
-              "do not record this as a round.")
-        return 3
-    print(f"VERDICT: {verdict} | findings: {findings} | plan-sha256: {plan_hash} "
-          f"| reviewer: {p['name']}")
+        return 3, ("INVALID: no VERDICT line at the end of the reply — "
+                   "do not record this as a round")
     if args.round_no == 1 and verdict == "APPROVED" and findings < args.min_findings:
-        print(f"INVALID: rubber-stamp suspicion — APPROVED in round 1 with only "
-              f"{findings} finding(s) (< {args.min_findings}). Check the model/prompt, "
-              "or skip the review and log the plan as not cross-reviewed.")
-        return 3
-    return 0
+        return 3, (f"INVALID: rubber-stamp suspicion — APPROVED in round 1 with only "
+                   f"{findings} finding(s) (< {args.min_findings}); check the "
+                   "model/prompt, or skip the review and log the plan as not cross-reviewed")
+    return 0, f"VERDICT: {verdict}"
 
 
 def main():
@@ -452,7 +464,8 @@ def main():
             p = profile(name)
         except SystemExit as exc:
             if not args.chain:
-                raise
+                print(f"ERROR: {exc}")
+                return 2  # config error — keep the documented exit-code contract
             print(f"CHAIN: skipping '{name}' — {exc}")
             continue
 
