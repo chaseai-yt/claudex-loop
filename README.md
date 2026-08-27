@@ -118,6 +118,16 @@ Invoke as `/claudex-loop`, `/codex-review`, `/codex-build`. Update by `git pull`
 
 Pass e.g. `rounds=3` when invoking to override.
 
+## When Codex runs dry (fallback reviewers)
+
+The loop must not dead-end when Codex hits its usage limit mid-review ([#7](https://github.com/chaseai-yt/claudex-loop/issues/7)). Two scripts and a protocol handle it — full write-up in [FALLBACK.md](./FALLBACK.md):
+
+- `scripts/codex_usage.py` — remaining 5-hour/weekly quota + reset times, read from Codex's local session rollouts (no API call). Checked before round 1 and consulted on any mid-loop failure.
+- `scripts/fallback_review.py` — an optional substitute reviewer over any OpenAI-compatible endpoint (LM Studio and Ollama locally, OpenRouter, OpenAI, Gemini, Anthropic), configured via git-ignored `.env` profiles ([.env.example](./.env.example)); `--check` preflights every provider (reachability, auth, remaining OpenRouter credits) and `--chain` walks the configured order to the first viable one, reporting every skip. Env contract: `CLAUDEX_REVIEWERS=<name,name,…>` (chain order) plus per profile `CLAUDEX_REVIEWER_<NAME>_BASE_URL`, `_MODEL`, and `_API_KEY_ENV` (name of the variable holding the key; optional `_API_KEY` inline works but warns, optional `_TEMPERATURE`/`_MAX_TOKENS`/`_TIMEOUT`). It sees only the plan text — read-only by construction, no vendor sandbox to audit — rejects rubber-stamp approvals (round-1 APPROVED with fewer than 3 findings is invalid), and binds every verdict to the plan's SHA256.
+- The rules: a switch is **never automatic and never silent** — on confirmed exhaustion the loop halts and the user picks *wait* (resume the same thread after reset), *switch* (fallback rounds are labeled in the log; the approval is weaker and the log says so), or *skip* (plan goes to sign-off marked not cross-reviewed).
+
+With no `.env` profiles configured, nothing changes — Codex stays the only reviewer and the loop behaves exactly as before.
+
 ## Safety
 
 **Review (Phases 0–2):** Codex runs **read-only every round** — `-s read-only` on the first call, `-c sandbox_mode="read-only"` on every resume (the `resume` subcommand doesn't accept `-s`, and without forcing read-only it would inherit your `config.toml` sandbox default, which may be `danger-full-access`). The skills handle this for you. No code is written until you approve the final plan.

@@ -79,11 +79,11 @@ Maintain `ROUND` (start 1) and `THREAD_ID` (empty until round 1 returns).
 codex exec -s read-only --json \
   -o /tmp/codex-verdict.txt \
   "$(cat REVIEW_PROMPT)" \
-  < /dev/null 2>/dev/null | grep '"type":"thread.started"'
+  < /dev/null 2>/tmp/codex-stderr.txt | grep '"type":"thread.started"'
 ```
 Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that is `THREAD_ID`. The critique text lands in `/tmp/codex-verdict.txt` (Codex's last message). Read that file.
 
-> Note: stderr carries cosmetic MCP/auth noise on some setups — `2>/dev/null` is intentional. Confirm success by the presence of the verdict file + a `thread.started` line. If neither appears, the run failed (auth/model) — stop and tell the user.
+> Note: stderr goes to a **file**, not `/dev/null` — it carries cosmetic MCP/auth noise, but it is also the ONLY place a quota or auth failure shows up (a 429 or 401 can present as exit 0 + valid `thread_id` + empty verdict file; see [FALLBACK.md](../../FALLBACK.md)). Confirm success by the presence of the verdict file + a `thread.started` line. If neither appears, the run failed (auth/model/quota) — read the stderr file, stop and tell the user.
 >
 > **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF. Required on the resume call below too.
 >
@@ -97,7 +97,7 @@ Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line �
 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
   -o /tmp/codex-verdict.txt \
   "I revised the plan. Re-review PLAN.md. Same rules. End with VERDICT: APPROVED or VERDICT: REVISE." \
-  < /dev/null 2>/dev/null >/dev/null
+  < /dev/null 2>/tmp/codex-stderr.txt >/dev/null
 ```
 
 Both `codex exec` and `codex exec resume` support `--json` (stream → parse `thread_id` first round) and `-o/--output-last-message` (verdict capture).
@@ -109,6 +109,8 @@ Both `codex exec` and `codex exec resume` support `--json` (stream → parse `th
    - `VERDICT: REVISE` → Claude reads the critique, decides **what's actually worth acting on** (Claude has final say — Codex advises, it does not command). Revise `PLAN_FILE`. Append to `LOG_FILE`: `### Claude's response` + what you changed and what you rejected and why. Increment `ROUND`.
 3. If `ROUND > MAX_ROUNDS` → break to Step 3 (deadlock).
 
+**If Codex dies mid-loop (quota, credits, outage):** don't dead-end and don't retry blind — full protocol in [FALLBACK.md](../../FALLBACK.md). Check remaining quota + reset time with `python scripts/codex_usage.py` (reads Codex's local session rollouts, no API call; also run it before round 1). On a confirmed terminal failure (429/"usage limit"/401 in the stderr file, or an empty verdict file on exit 0 twice in a row), halt and let the USER choose: **wait** for the reset (resume the same `$THREAD_ID` — session memory survives), **switch** to a configured fallback reviewer (`python scripts/fallback_review.py --plan PLAN.md --log <LOG_FILE> --round <n> --out /tmp/verdict.txt` — any OpenAI-compatible endpoint via `.env` profiles, plan-text only, rubber-stamp-rejecting, plan-hash-bound; log those rounds as `## Round <n> — <model> (via <reviewer>, fallback)`), or **skip** the review with an explicit log entry and take the plan to sign-off marked **not cross-reviewed**. Never automatically, never silently.
+
 ### Step 3 — Resolution (human gate #2)
 
 **If APPROVED:** Present to the user — the final `PLAN_FILE`, a 3-bullet summary of what the argument improved, and the round count. Ask: *"Plan survived N rounds of Codex. Implement it now — Codex builds it (`/codex-build`), Claude builds it, or stop here?"* Only on a yes is code written. **No code is written during the loop.** If the user picks Codex, invoke the `codex-build` skill with `SPEC_FILE=PLAN.md` and the same `LOG_FILE` — roles flip (Codex writes, Claude reviews the diff) and the build rounds append to the same log.
@@ -119,6 +121,7 @@ Both `codex exec` and `codex exec resume` support `--json` (stream → parse `th
 
 - Codex is read-only EVERY round — `-s read-only` for the first call, `-c sandbox_mode="read-only"` for every resume (resume has no `-s`). It never writes. If you're tempted to give it write access, stop — that's a different skill.
 - The loop ALWAYS terminates at `MAX_ROUNDS`. No unbounded recursion.
+- **Findings ledger:** every reviewer output — each Codex round, each fallback round (valid or an INVALID attempt, labeled as such), any cold-read — is appended to `LOG_FILE` verbatim when it arrives, followed by Claude's per-finding disposition (accepted → what changed / rejected → why). Nothing about a review lives only in the chat; `scripts/fallback_review.py --append-log <LOG_FILE>` does it mechanically for fallback rounds.
 - Claude is the final arbiter on every REVISE — incorporate good critiques, reject bad ones *with a reason logged*. Don't cave to Codex on everything (that defeats the cross-model check) and don't ignore it (that defeats the point).
 - Code only after human gate #2.
 - `LOG_FILE` is the deliverable — it tells the whole story of the argument. Keep it complete.
