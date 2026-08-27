@@ -1,3 +1,5 @@
+# Reviewer credentials/config — never commit (see .env.example for the template)
+.env
 __pycache__/
 *.py[cod]
 .venv/

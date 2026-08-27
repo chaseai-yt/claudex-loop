@@ -130,6 +130,37 @@ The third example starts in Claude Code; the fourth starts in Codex. The host se
 | `inspect` | `on` | `off` is an explicit, logged opt-out |
 | `PROOF_CMD` | from plan/repo | Agreed command that verifies the deliverable |
 
+## When Codex runs dry (fallback reviewers)
+
+A usage limit is not a verdict, and it must not end the loop
+([#7](https://github.com/chaseai-yt/claudex-loop/issues/7)). Two scripts and a
+protocol handle it -- full write-up in [FALLBACK.md](./FALLBACK.md):
+
+- `scripts/codex_usage.py` -- remaining 5-hour/weekly quota and reset times, read
+  from Codex's local session rollouts, no API call. The runner's diagnostics say
+  the reviewer is gone; this says when it comes back. Checked before round 1 and
+  on any failed round.
+- `scripts/fallback_review.py` -- an optional substitute reviewer over any
+  OpenAI-compatible endpoint (LM Studio and Ollama locally, OpenRouter, OpenAI,
+  Gemini, Anthropic), configured through git-ignored `.env` profiles
+  ([.env.example](./.env.example)). `--check` preflights every provider
+  (reachability, auth, remaining OpenRouter credits) and `--chain` walks the
+  configured order to the first viable one, reporting every skip.
+- **Reduced visibility, stated plainly.** The substitute receives the plan and
+  log text and has **no repository access at all** -- read-only by construction
+  rather than by sandbox, which is also the limitation: it cannot check a claim
+  against the code. Every such round is labeled in the log as
+  `fallback -- plan-text only, no repo access`, its verdict is bound to the
+  plan's SHA256, and the resulting approval is explicitly weaker than one from a
+  reviewer that read the repository.
+- The rules: a switch is **never automatic and never silent**. On confirmed
+  exhaustion the loop halts and the user picks *wait* (resume the same session
+  after the reset), *switch*, or *skip* (the plan goes to sign-off marked not
+  cross-reviewed).
+
+With no `.env` profiles configured, nothing changes -- the configured reviewer
+stays the only reviewer and the loop behaves exactly as before.
+
 ## What an approval means
 
 The runner validates a successful CLI turn and a structured review; an empty output file or a session-start event cannot count as approval. The approval records the plan's path and SHA256. Changing the plan invalidates it. Inspections also record the pre-build commit and a fingerprint of the inspected changes, including staged and untracked files. Later code changes need another inspection.

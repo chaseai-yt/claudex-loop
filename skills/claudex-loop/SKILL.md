@@ -75,6 +75,16 @@ Each successful response contains a verdict, evidence-backed findings, actual co
 - **REVISE:** the host arbitrates each finding. Implement warranted plan changes; reject unsupported suggestions with reasons. Record dispositions and send the revised plan to the same reviewer. Avoid relitigating resolved points without new evidence.
 - **BLOCKED / failed process / malformed result:** never count this as approval. Explain the actual missing evidence or operational failure. Do not burn remaining rounds on blind retries or switch providers silently.
 
+### When the reviewer's provider runs dry
+
+A usage limit is not a verdict, and it must not end the loop. Full protocol: [FALLBACK.md](../../FALLBACK.md).
+
+- **Before round 1 and on any failed round**, read the remaining quota with `python scripts/codex_usage.py` — the 5-hour and weekly windows and their reset times, taken from Codex's local session rollouts, no API call. It answers the question the runner's diagnostics cannot: *when does it come back.*
+- **Confirmed exhaustion halts the loop and hands the decision to the user** — never automatically, never silently: **wait** for the reset (resume the same result with `--resume`, session memory survives), **switch** to a configured substitute reviewer, or **skip** the review and take the plan to sign-off explicitly marked not cross-reviewed. Same doctrine as `inspect=off`: skipping yes, silent skipping never.
+- **The substitute reviewer is weaker, and the log says so.** `python scripts/fallback_review.py --plan PLAN --log LOG --round N --append-log LOG` talks to any OpenAI-compatible endpoint (LM Studio and Ollama locally, OpenRouter, OpenAI, Gemini, Anthropic) configured through git-ignored `.env` profiles; `--chain` walks the configured order to the first viable provider and reports every skip. It receives **plan and log text only and has no repository access at all** — read-only by construction rather than by sandbox, which is also its limitation: it cannot check a claim against the code. Rounds are logged as `## Round <n> — <model> (via <reviewer>, fallback — plan-text only, no repo access)` and the verdict is bound to the plan's SHA256.
+
+With no `.env` profiles configured nothing changes: the configured reviewer stays the only reviewer.
+
 Stop at `MAX_ROUNDS`. Present unresolved findings and the host's position instead of manufacturing convergence. A changed plan requires another review. Before building, run the approval check on the final plan. If the user explicitly chooses to proceed without independent approval, record that override and use the standalone unreviewed-spec path; never label it approved.
 
 ## Phase 3 — Build and inspect
