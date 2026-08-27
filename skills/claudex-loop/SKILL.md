@@ -183,9 +183,9 @@ If invoked with e.g. `rounds=3`, use that for `MAX_ROUNDS`. Echo resolved values
 ### Round 1 — fresh session (capture `thread_id`)
 ```bash
 codex exec -s read-only --json -o /tmp/codex-verdict.txt "$(cat REVIEW_PROMPT)" \
-  < /dev/null 2>/dev/null | grep '"type":"thread.started"'
+  < /dev/null 2>/tmp/codex-stderr.txt | grep '"type":"thread.started"'
 ```
-Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that's `THREAD_ID`. The critique is in `/tmp/codex-verdict.txt`. Confirm success by the verdict file + a `thread.started` line; if neither appears, the run failed (auth/model) — stop and tell the user. `2>/dev/null` suppresses cosmetic MCP/auth stderr noise. **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF.
+Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that's `THREAD_ID`. The critique is in `/tmp/codex-verdict.txt`. Confirm success by the verdict file + a `thread.started` line; if neither appears, the run failed (auth/model) — stop and tell the user. stderr goes to a **file**, not `/dev/null`: it carries cosmetic MCP/auth noise, but it is also the ONLY place a quota or auth failure shows up — a 429 or 401 can present as exit 0 + valid `thread_id` + empty verdict file, and without the stderr file that is indistinguishable from a model that said nothing (see [FALLBACK.md](../../FALLBACK.md)). **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF.
 
 ### Rounds 2..MAX — resume the SAME session (Codex remembers its prior critiques)
 ```bash
@@ -195,7 +195,7 @@ Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line �
 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
   -o /tmp/codex-verdict.txt \
   "I revised the plan. Re-review PLAN.md — check whether your prior findings are addressed and flag anything new. End with VERDICT: APPROVED or VERDICT: REVISE." \
-  < /dev/null 2>/dev/null >/dev/null
+  < /dev/null 2>/tmp/codex-stderr.txt >/dev/null
 ```
 Both `codex exec` and `codex exec resume` support `--json` and `-o/--output-last-message`. The `< /dev/null` redirect is required on the resume call too — same non-interactive stdin hang as Round 1.
 
@@ -207,6 +207,17 @@ Both `codex exec` and `codex exec resume` support `--json` and `-o/--output-last
    - `VERDICT: APPROVED` → break to Resolution (converged).
    - `VERDICT: REVISE` → Claude decides **what's actually worth acting on** (Claude is final arbiter — Codex advises, doesn't command). Revise `PLAN_FILE`. Append `### Claude's response` to `LOG_FILE`: what changed, what was rejected, why. Increment round.
 3. If round > `MAX_ROUNDS` → break to Resolution (deadlock).
+
+### If Codex dies mid-loop (quota, credits, outage) — degrade, don't dead-end
+
+Full protocol: [FALLBACK.md](../../FALLBACK.md). The short form:
+
+- **Before round 1**, check the quota: `python scripts/codex_usage.py` reads the remaining 5-hour/weekly windows and reset times from Codex's local session rollouts (no API call). Exit 1 → don't start; tell the user when Codex comes back.
+- **Terminal-failure signals** mid-loop: 429/"usage limit"/401 in the stderr file, or an empty verdict file on exit 0 twice in a row (once = stumble, retry one time).
+- **No blind retries.** Halt, state cause + reset time, and let the USER pick — never automatically, never silently:
+  1. **Wait** — resume the same `$THREAD_ID` after the reset (session memory survives).
+  2. **Switch** to a configured fallback reviewer: `python scripts/fallback_review.py --plan PLAN.md --log <LOG_FILE> --round <n> --out /tmp/verdict.txt` — any OpenAI-compatible endpoint (LM Studio/Ollama local, OpenRouter, OpenAI, Gemini, Anthropic; profiles in `.env`, see `.env.example`). It sees only plan+log text (read-only by construction), rejects rubber-stamps (round-1 APPROVED with < 3 findings = invalid), and binds the verdict to the plan's SHA256. Log such rounds as `## Round <n> — <model> (via <reviewer>, fallback)` — the approval is weaker than a repo-reading Codex round and the log must say so.
+  3. **Skip** — Phase 2 ends without a verdict; log `## Review skipped — Codex quota exhausted (<window>, resets <time>), decided by <user>` and take the plan to sign-off marked **not cross-reviewed**. Same doctrine as `inspect=off`: skipping yes, silent skipping never.
 
 ### Resolution (you sign off — final gate)
 - **APPROVED:** present the final `PLAN_FILE`, a 3-bullet summary of what the loop improved, and the round count. Ask: *"Interrogated + survived N rounds of Codex. Implement it now — Codex builds it (`/codex-build`), Claude builds it, or stop here?"* Code only on a yes.
