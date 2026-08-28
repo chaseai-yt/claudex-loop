@@ -71,7 +71,13 @@ Maintain `ROUND` (start 1) and `THREAD_ID` (empty until round 1 returns).
 
 **The review prompt** sent to Codex each round (adjust the task line):
 
-> You are an adversarial reviewer for an implementation plan. Be skeptical and specific — your job is to find what breaks, not to be agreeable. Read the plan at `PLAN.md` (and any repo files you need; you are read-only). Identify concrete flaws: security holes, race conditions, missing edge cases, schema conflicts, wrong assumptions, observability gaps, simpler alternatives. For each, give a one-line fix. Do NOT modify any files. End your reply with EXACTLY one line: `VERDICT: APPROVED` if the plan is sound enough to implement, or `VERDICT: REVISE` if it still has material problems.
+> You are an adversarial reviewer for an implementation plan. Be skeptical and specific — your job is to find what breaks, not to be agreeable. Read the plan at `PLAN.md` (and any repo files you need; you are read-only). Identify concrete flaws: security holes, race conditions, missing edge cases, schema conflicts, wrong assumptions, observability gaps, simpler alternatives. For each, give a one-line fix.
+>
+> The plan's own file list is a starting point, not the review scope. For every shared resource the plan touches — a file it rewrites, a table it writes, a queue, a lock, a cache — enumerate **every** writer of that resource in the repo, then say which ones the plan leaves unfixed. A defect class that appears in two of three writers is present in the third until you have opened it and shown otherwise. Name the files you did not open, so the gap is recorded rather than assumed empty.
+>
+> Where a code comment claims a guarantee, check the code actually provides it. A comment describing the precise race it prevents, above code that does not prevent it, is the most reliable place to find a live bug.
+>
+> Do NOT modify any files. End your reply with EXACTLY one line: `VERDICT: APPROVED` if the plan is sound enough to implement, or `VERDICT: REVISE` if it still has material problems.
 
 **Round 1** (creates the session — capture `thread_id`):
 
@@ -114,6 +120,8 @@ Both `codex exec` and `codex exec resume` support `--json` (stream → parse `th
 **If APPROVED:** Present to the user — the final `PLAN_FILE`, a 3-bullet summary of what the argument improved, and the round count. Ask: *"Plan survived N rounds of Codex. Implement it now — Codex builds it (`/codex-build`), Claude builds it, or stop here?"* Only on a yes is code written. **No code is written during the loop.** If the user picks Codex, invoke the `codex-build` skill with `SPEC_FILE=PLAN.md` and the same `LOG_FILE` — roles flip (Codex writes, Claude reviews the diff) and the build rounds append to the same log.
 
 **If MAX_ROUNDS hit without APPROVED (deadlock):** Do NOT pretend it converged. Surface the unresolved disagreements explicitly: list each point Codex still flags and Claude's counter-position. Hand it to the human to break the tie. This is a legitimate, useful outcome — a flagged disagreement beats a false "approved."
+
+**Either way, close with the residual risk: which files no round ever opened.** An APPROVED verdict covers the surface that was actually read, and rounds tend to keep re-reading the files the plan names. Track the set of files opened across all rounds, diff it against the files that touch the same shared state, and report the remainder as unreviewed rather than sound. This is the cheapest finding in the whole loop and the easiest to skip: on the run this instruction came from, two of three writers to one file were reviewed and fixed, the third was never opened, and it held the same defect.
 
 ## Hard rules
 

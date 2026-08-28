@@ -34,8 +34,12 @@ Echo resolved values before starting.
 ## Step 0 — Gates (before any Codex launch)
 
 1. **Spec gate.** `SPEC_FILE` must exist and read as a work order (goal, concrete steps, bounds). No spec → offer `/grill-me-codex` (interview first) or `/codex-review` (have a plan, want it stress-tested) instead. If the user insists on building from a rough idea, write the spec WITH them first — that's design, and design stays with Claude.
-2. **Clean-tree gate.** `git status -sb`. Dirty working tree → STOP and ask the user to commit or stash first. Non-negotiable: Codex writes with full access, and a dirty tree means its diff can't be isolated or cleanly reverted.
-3. Confirm scope in one line, then go. No round-by-round approvals; the human gate is at the end.
+2. **Clean-tree gate.** `git status -sb`. Codex writes with full access, so the build must start from a tree where its diff is the only diff — otherwise you cannot isolate what it did or revert it cleanly. That requirement is non-negotiable; how you satisfy it depends on whose the dirt is.
+   - **The user's own uncommitted work** → STOP and ask them to commit or stash.
+   - **Another session's live work** (a parallel agent, a long-running task, anything you did not put there) → do NOT stash it; that takes work out from under a running session. Build in a detached worktree instead, which satisfies the gate properly: `git worktree add --detach <scratch>/<name> HEAD`, copy in any untracked file the spec needs (an untracked `SPEC_FILE` does not exist in a fresh worktree), and run Codex there. Remove it with `git worktree remove` once the diff is merged or abandoned.
+   - Either way, say which you chose and why before launching. Never launch into a dirty tree on the reasoning that the subtree you care about happens to be clean.
+3. **Path-scope gate**, and it only bites in a worktree. If `SPEC_FILE` cites findings by absolute path (`/Users/.../repo/src/foo.py:210`), those resolve to the ORIGINAL checkout, and a `--yolo` Codex will happily edit it — silently defeating the isolation you just set up. Grep the spec for absolute paths; if there are any, the prompt contract must say: resolve every such path relative to your own repo root, and never write outside the current working directory. State the forbidden prefixes literally.
+4. Confirm scope in one line, then go. No round-by-round approvals; the human gate is at the end.
 
 ## Step 1 — The build prompt (contract, via temp file)
 
@@ -71,11 +75,15 @@ codex exec --yolo --json -o /tmp/codex-build.txt - <"$P" 2>/dev/null | grep '"ty
 
 ## Step 3 — Verify (Claude, always, never delegated)
 
-Codex's report is advisory. Verify yourself:
+Codex's report is advisory, and so is any QA, self-review or verification subagent it ran on its own work. It reports PASS on builds that contain defects — expect that, and treat every claim in the report as a lead to check rather than a result. The whole reason roles are split is that whoever built it never grades it, and that applies to Codex grading itself inside its own session.
+
+Verify yourself:
 
 1. `git status -sb` + read the FULL diff (`git diff`). Judge it like a contributor PR: correctness, spec fidelity, style match with surrounding code, nothing touched outside scope.
-2. Run `PROOF_CMD` yourself (or the focused tests for the changed area). Codex's pasted output doesn't count as proof.
-3. Append to `LOG_FILE` under `## Act 3 — Build`: `### Round <n> — Codex build` + its report summary + `### Claude's verdict` + what passed/failed review.
+2. **Trace every changed test back to a spec line.** A green suite proves the code does what its tests say; it does not prove the tests were asked for. The failure mode to hunt is unrequested code paired with a test asserting it, because that combination reads as verified and sails through a proof run. List the tests the diff added, and for each one name the spec item it covers. A test with no spec line behind it is the tell: either Codex solved a problem the spec had already settled a different way, or it invented a requirement. Both are review findings.
+3. Run `PROOF_CMD` yourself (or the focused tests for the changed area). Codex's pasted output doesn't count as proof.
+4. **Read the "Deviations" section as a claim, not a summary.** "Deviations: None" is common on builds that did deviate — a spec step that turns out impossible gets quietly resolved the right way and never reported. Where the diff diverges from the spec text, decide whether the spec or the code was wrong, and log which.
+5. Append to `LOG_FILE` under `## Act 3 — Build`: `### Round <n> — Codex build` + its report summary + `### Claude's verdict` + what passed/failed review.
 
 ## Step 4 — Fix loop (same session, bounded)
 
@@ -99,8 +107,8 @@ Present: 3-bullet summary of what was built, files-changed list, proof-test outp
 
 ## Hard rules
 
-- Clean tree before launch. Always. No exceptions.
-- Claude never skips the diff read. Codex claims are advisory until Claude has read the diff and run the proof.
+- Codex's diff is the only diff in the tree it builds in. Always. A worktree is the way to get that when the dirt belongs to another session.
+- Claude never skips the diff read. Every Codex claim is advisory until Claude has read the diff and run the proof, and that includes any QA or self-review Codex ran inside its own session.
 - Fix loop terminates at `MAX_FIX_ROUNDS` — then Claude takes over. No unbounded delegation ping-pong.
 - Commits, pushes, releases, GitHub mutations: Claude-side only, after the human gate. Codex never commits.
 - `LOG_FILE` is the deliverable — with Acts 1/2 it tells the whole story: grilled → reviewed → built → verified.
