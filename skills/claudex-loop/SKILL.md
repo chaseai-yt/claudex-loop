@@ -181,11 +181,36 @@ If invoked with e.g. `rounds=3`, use that for `MAX_ROUNDS`. Echo resolved values
 (On greenfield there are no repo files — Codex reviews `PLAN.md` and its `## Assumptions` section on their own merits; the assumption sources give it something concrete to attack.)
 
 ### Round 1 — fresh session (capture `thread_id`)
+
+Pick a private scratch directory and write the review prompt above into it — the
+prompt file has to be one **you** created:
+
 ```bash
-codex exec -s read-only --json -o /tmp/codex-verdict.txt "$(cat REVIEW_PROMPT)" \
+SCRATCH_DIR=$(mktemp -d)                      # not /tmp directly: see below
+cat > "$SCRATCH_DIR/review-prompt.txt" <<'PROMPT'
+<the review prompt above, verbatim>
+PROMPT
+```
+
+```bash
+codex exec -s read-only --json -o "$SCRATCH_DIR/codex-verdict.txt" \
+  "$(cat "$SCRATCH_DIR/review-prompt.txt")" \
   < /dev/null 2>/dev/null | grep '"type":"thread.started"'
 ```
-Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that's `THREAD_ID`. The critique is in `/tmp/codex-verdict.txt`. Confirm success by the verdict file + a `thread.started` line; if neither appears, the run failed (auth/model) — stop and tell the user. `2>/dev/null` suppresses cosmetic MCP/auth stderr noise. **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF.
+Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that's `THREAD_ID`. The critique is in `$SCRATCH_DIR/codex-verdict.txt`. Confirm success by the verdict file + a `thread.started` line; if neither appears, the run failed (auth/model) — stop and tell the user. `2>/dev/null` suppresses cosmetic MCP/auth stderr noise.
+
+⛔ **Do not `cat REVIEW_PROMPT` and do not write the verdict to a fixed `/tmp` path.** Both
+were in this block until now, and both misbehave in the same quiet way — no error, just a
+review that did not review what you think:
+
+- `REVIEW_PROMPT` is a bare relative filename that no step here creates. On a clean repo
+  `cat` fails and Codex is launched with an **empty prompt** — it still returns a verdict.
+  On a repo that happens to ship a file by that name, **the repository under review writes
+  the reviewer's instructions**, which is the one input an adversarial reviewer must not
+  take from the thing it is judging.
+- `$SCRATCH_DIR/codex-verdict.txt` is world-writable and predictable. Another local process can
+  pre-create it as a symlink and have Codex's `-o` overwrite the file it points at, and two
+  reviews running at once silently consume each other's verdicts. **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF.
 
 ### Rounds 2..MAX — resume the SAME session (Codex remembers its prior critiques)
 ```bash
@@ -193,7 +218,7 @@ Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line �
 # config.toml (possibly danger-full-access) and could WRITE files. This is the
 # single most important safety line in the skill — verified 2026-06-04.
 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
-  -o /tmp/codex-verdict.txt \
+  -o "$SCRATCH_DIR/codex-verdict.txt" \
   "I revised the plan. Re-review PLAN.md — check whether your prior findings are addressed and flag anything new. End with VERDICT: APPROVED or VERDICT: REVISE." \
   < /dev/null 2>/dev/null >/dev/null
 ```
@@ -202,7 +227,7 @@ Both `codex exec` and `codex exec resume` support `--json` and `-o/--output-last
 **Timeout guard (both rounds):** run every `codex exec` / `codex exec resume` with a 10-minute ceiling so any future stall fails loud instead of hanging silently. Via Claude Code's Bash tool, pass `timeout: 600000` on the tool call (the default 2-minute tool timeout is too short for real reviews and would kill them mid-run). In a plain shell, prefix the command with `timeout 600` (Linux / Git Bash) or `gtimeout 600` (macOS via coreutils — stock macOS has no `timeout`). If the ceiling trips, treat it as a failed run: stop and tell the user rather than retrying blind.
 
 ### Each round, after Codex returns
-1. Read `/tmp/codex-verdict.txt`; append to `LOG_FILE`: `## Round <n> — Codex` + the full critique.
+1. Read `$SCRATCH_DIR/codex-verdict.txt`; append to `LOG_FILE`: `## Round <n> — Codex` + the full critique.
 2. Grep the last line for the verdict:
    - `VERDICT: APPROVED` → break to Resolution (converged).
    - `VERDICT: REVISE` → Claude decides **what's actually worth acting on** (Claude is final arbiter — Codex advises, doesn't command). Revise `PLAN_FILE`. Append `### Claude's response` to `LOG_FILE`: what changed, what was rejected, why. Increment round.
