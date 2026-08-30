@@ -73,15 +73,37 @@ Maintain `ROUND` (start 1) and `THREAD_ID` (empty until round 1 returns).
 
 > You are an adversarial reviewer for an implementation plan. Be skeptical and specific — your job is to find what breaks, not to be agreeable. Read the plan at `PLAN.md` (and any repo files you need; you are read-only). Identify concrete flaws: security holes, race conditions, missing edge cases, schema conflicts, wrong assumptions, observability gaps, simpler alternatives. For each, give a one-line fix. Do NOT modify any files. End your reply with EXACTLY one line: `VERDICT: APPROVED` if the plan is sound enough to implement, or `VERDICT: REVISE` if it still has material problems.
 
-**Round 1** (creates the session — capture `thread_id`):
+**Round 1** (creates the session — capture `thread_id`). First pick a private scratch
+directory and write the review prompt above into it — the prompt file has to be one
+**you** created:
+
+```bash
+SCRATCH_DIR=$(mktemp -d)                      # not /tmp directly: see below
+cat > "$SCRATCH_DIR/review-prompt.txt" <<'PROMPT'
+<the review prompt above, verbatim>
+PROMPT
+```
 
 ```bash
 codex exec -s read-only --json \
-  -o /tmp/codex-verdict.txt \
-  "$(cat REVIEW_PROMPT)" \
+  -o "$SCRATCH_DIR/codex-verdict.txt" \
+  "$(cat "$SCRATCH_DIR/review-prompt.txt")" \
   < /dev/null 2>/dev/null | grep '"type":"thread.started"'
 ```
-Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that is `THREAD_ID`. The critique text lands in `/tmp/codex-verdict.txt` (Codex's last message). Read that file.
+
+⛔ **Do not `cat REVIEW_PROMPT` and do not write the verdict to a fixed `/tmp` path.** Both
+were in this block until now, and both fail quietly — no error, just a review that did not
+review what you think:
+
+- `REVIEW_PROMPT` is a bare relative filename that no step here creates. On a clean repo
+  `cat` fails and Codex is launched with an **empty prompt** — it still returns a verdict.
+  On a repo that happens to ship a file by that name, **the repository under review writes
+  the reviewer's instructions**, which is the one input an adversarial reviewer must not
+  take from the thing it is judging.
+- `/tmp/codex-verdict.txt` is world-writable and predictable. Another local process can
+  pre-create it as a symlink and have Codex's `-o` overwrite the file it points at, and two
+  reviews running at once silently consume each other's verdicts.
+Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that is `THREAD_ID`. The critique text lands in `$SCRATCH_DIR/codex-verdict.txt` (Codex's last message). Read that file.
 
 > Note: stderr carries cosmetic MCP/auth noise on some setups — `2>/dev/null` is intentional. Confirm success by the presence of the verdict file + a `thread.started` line. If neither appears, the run failed (auth/model) — stop and tell the user.
 >
@@ -95,7 +117,7 @@ Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line �
 # NOTE: resume rejects -s. Force read-only via -c sandbox_mode, or Codex
 # inherits config.toml (possibly danger-full-access) and could write files.
 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
-  -o /tmp/codex-verdict.txt \
+  -o "$SCRATCH_DIR/codex-verdict.txt" \
   "I revised the plan. Re-review PLAN.md. Same rules. End with VERDICT: APPROVED or VERDICT: REVISE." \
   < /dev/null 2>/dev/null >/dev/null
 ```
@@ -103,7 +125,7 @@ codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
 Both `codex exec` and `codex exec resume` support `--json` (stream → parse `thread_id` first round) and `-o/--output-last-message` (verdict capture).
 
 **Each round, after Codex returns:**
-1. Read `/tmp/codex-verdict.txt`. Append to `LOG_FILE`: `## Round <n> — Codex` + the full critique.
+1. Read `$SCRATCH_DIR/codex-verdict.txt`. Append to `LOG_FILE`: `## Round <n> — Codex` + the full critique.
 2. Grep the last line for the verdict token.
    - `VERDICT: APPROVED` → break the loop, go to Step 3 (converged).
    - `VERDICT: REVISE` → Claude reads the critique, decides **what's actually worth acting on** (Claude has final say — Codex advises, it does not command). Revise `PLAN_FILE`. Append to `LOG_FILE`: `### Claude's response` + what you changed and what you rejected and why. Increment `ROUND`.

@@ -42,7 +42,8 @@ Echo resolved values before starting.
 Never inline-quote the prompt — write it to a temp file. Fill this contract completely; when chained from a grill/review skill, derive it from the plan's sections:
 
 ```bash
-P=$(mktemp)
+SCRATCH_DIR=$(mktemp -d)   # see the /tmp note in Step 2
+P="$SCRATCH_DIR/build-prompt.txt"
 cat >"$P" <<'EOF'
 GOAL: <one paragraph — what done looks like>
 SPEC: Read <SPEC_FILE> at the repo root. It is a frozen, already-reviewed spec.
@@ -60,12 +61,18 @@ EOF
 ## Step 2 — Launch Codex (fresh session, capture `thread_id`)
 
 ```bash
-codex exec --yolo --json -o /tmp/codex-build.txt - <"$P" 2>/dev/null | grep '"type":"thread.started"'
+codex exec --yolo --json -o "$SCRATCH_DIR/codex-build.txt" - <"$P" 2>/dev/null | grep '"type":"thread.started"'
 ```
 
 - Prompt goes via stdin (`- <"$P"`) — this both avoids quoting bugs AND sidesteps the non-TTY stdin hang (`codex exec` blocks forever waiting on stdin EOF under Claude Code's Bash tool; feeding the file gives immediate EOF).
-- Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → `THREAD_ID`. Codex's final report lands in `/tmp/codex-build.txt` — read that file; don't parse the JSONL stream for content.
+- Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → `THREAD_ID`. Codex's final report lands in `$SCRATCH_DIR/codex-build.txt` — read that file; don't parse the JSONL stream for content.
 - `2>/dev/null` suppresses cosmetic MCP/auth stderr noise. Confirm success by the report file + a `thread.started` line; neither → failed run (auth/model) — stop and tell the user.
+
+⛔ **Not a fixed `/tmp` path**, which is what this said until now. `/tmp` is world-writable
+and `/tmp/codex-build.txt` is predictable, so another local process can pre-create it as a
+symlink and have Codex's `-o` overwrite whatever it points at — and two builds running at
+once overwrite each other's report. That report is the only prose record of a `--yolo`
+session, so losing it costs the one artefact explaining what was written and why.
 - **Timing:** foreground with `timeout: 600000` on the Bash tool call (default 2-min tool timeout kills real builds). If the spec is clearly >10 min of work (multi-file feature, migration, anything with image generation), launch with `run_in_background: true` instead and read the `-o` file when it exits. Don't kill a quiet background run early — Codex builds are legitimately slow.
 - **Heads-up on completion (required):** when a background Codex run finishes, the FIRST line of your next message to the user must be a loud standalone banner — `🔔 CODEX FINISHED — <what> (exit ok/fail) — verifying now` — BEFORE any verification output. The user is not watching tool calls; never let a completed build slide silently into the verify phase.
 
@@ -85,7 +92,7 @@ Problems found → resume the SAME session (Codex keeps its context; cheaper and
 # resume has no --yolo and no -C: run from the repo dir and spell the long flag,
 # or Codex inherits config.toml's sandbox (possibly read-only) and can't write.
 codex exec resume "$THREAD_ID" --dangerously-bypass-approvals-and-sandbox --json \
-  -o /tmp/codex-build.txt - <"$P2" 2>/dev/null >/dev/null
+  -o "$SCRATCH_DIR/codex-build.txt" - <"$P2" 2>/dev/null >/dev/null
 ```
 
 Re-verify (Step 3) after each round. After `MAX_FIX_ROUNDS` failed rounds: STOP delegating — Claude takes over and finishes the remaining fixes directly. Log the takeover. Ping-ponging trivia through delegation burns more than it saves.
