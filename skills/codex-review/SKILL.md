@@ -13,6 +13,7 @@ This is a **deliberate, high-stakes tool** — reach for it on auth, data models
 
 - Codex CLI installed and recent: `codex --version` (need ≥ 0.130; the default `gpt-5.5` model errors on older CLIs).
 - Codex authenticated: a prior `codex login` (ChatGPT account is fine). If a run returns an auth/model error, surface it to the user — do not silently retry.
+- **`--skip-git-repo-check` is REQUIRED on every `codex exec` and `codex exec resume` call.** In any workspace that is not a git repository, Codex aborts instantly with `Not inside a trusted directory and --skip-git-repo-check was not specified.` It fails *before the model is reached*, writing **no verdict file and no `thread.started` line** — indistinguishable from an auth failure, which is what makes it expensive to diagnose. A `trust_level = "trusted"` entry in `~/.codex/config.toml` does **not** substitute for it. What the flag actually does: it bypasses the untrusted-directory startup gate, not any git-repo-scoped sandbox boundary — Codex's writable roots are `[cwd, /tmp, $TMPDIR]` regardless of the flag or whether the directory is a git repo, so nothing about the sandbox widens. (Verified empirically on codex-cli 0.151.0, macOS: identical `workspace-write` behavior with vs. without the flag, in and out of a real repo.) Separately, any successful run — flag or not — persists `[projects."<cwd>"] trust_level = "trusted"` into `~/.codex/config.toml`, so a directory is trusted permanently after its first run either way.
 - Do NOT pin `-m` unless the user asks. The user's `~/.codex/config.toml` default model is used. Pinning `gpt-5.x-codex` variants fails on ChatGPT-account auth.
 - **Echo the active model before Round 1** so the user can confirm: read the `model` line from `~/.codex/config.toml` (absent = "CLI default"); state it with the resolved tunables. If the user objects, stop before burning a round.
 - **Sandbox flag differs between the two commands.** `codex exec` accepts `-s read-only`. `codex exec resume` does NOT — it rejects `-s` ("unexpected argument"). On resume you MUST force read-only via `-c sandbox_mode="read-only"`, because `config.toml` may default `sandbox_mode` to `danger-full-access` (+ `approval_policy="never"`) — which would let Codex WRITE files mid-loop. This is the single most important safety detail in this skill: verified end-to-end on 2026-06-04.
@@ -76,7 +77,7 @@ Maintain `ROUND` (start 1) and `THREAD_ID` (empty until round 1 returns).
 **Round 1** (creates the session — capture `thread_id`):
 
 ```bash
-codex exec -s read-only --json \
+codex exec -s read-only --skip-git-repo-check --json \
   -o /tmp/codex-verdict.txt \
   "$(cat REVIEW_PROMPT)" \
   < /dev/null 2>/dev/null | grep '"type":"thread.started"'
@@ -94,7 +95,7 @@ Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line �
 ```bash
 # NOTE: resume rejects -s. Force read-only via -c sandbox_mode, or Codex
 # inherits config.toml (possibly danger-full-access) and could write files.
-codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
+codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --skip-git-repo-check --json \
   -o /tmp/codex-verdict.txt \
   "I revised the plan. Re-review PLAN.md. Same rules. End with VERDICT: APPROVED or VERDICT: REVISE." \
   < /dev/null 2>/dev/null >/dev/null

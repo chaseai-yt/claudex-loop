@@ -160,6 +160,7 @@ Hand the locked plan to Codex for adversarial review. Mechanics verified end-to-
 ### Prerequisites (verify once, fast)
 - `codex --version` ≥ 0.130 (older CLIs error on the default `gpt-5.5` model).
 - Codex authenticated (prior `codex login`; ChatGPT account is fine). On auth/model error, surface it — don't silently retry.
+- **`--skip-git-repo-check` is REQUIRED on every `codex exec` / `codex exec resume`.** A non-git workspace otherwise dies with `Not inside a trusted directory and --skip-git-repo-check was not specified.` — before the model is reached, with no verdict file and no `thread.started` line, so it looks exactly like an auth failure. `trust_level = "trusted"` in `config.toml` does not substitute for it.
 - Do NOT pin `-m`. Use the config default. Pinning `gpt-5.x-codex` variants 400s on ChatGPT-account auth.
 - **Echo the active model before Round 1** so the user can confirm: read the `model` line from `~/.codex/config.toml` (if absent, report "CLI default"). State it alongside the resolved tunables, e.g. `Reviewer model: CLI default (config unpinned) — codex-cli 0.137.0`. If the user objects, stop and let them adjust config before burning a review round.
 
@@ -182,7 +183,7 @@ If invoked with e.g. `rounds=3`, use that for `MAX_ROUNDS`. Echo resolved values
 
 ### Round 1 — fresh session (capture `thread_id`)
 ```bash
-codex exec -s read-only --json -o /tmp/codex-verdict.txt "$(cat REVIEW_PROMPT)" \
+codex exec -s read-only --skip-git-repo-check --json -o /tmp/codex-verdict.txt "$(cat REVIEW_PROMPT)" \
   < /dev/null 2>/dev/null | grep '"type":"thread.started"'
 ```
 Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line → that's `THREAD_ID`. The critique is in `/tmp/codex-verdict.txt`. Confirm success by the verdict file + a `thread.started` line; if neither appears, the run failed (auth/model) — stop and tell the user. `2>/dev/null` suppresses cosmetic MCP/auth stderr noise. **`< /dev/null` is mandatory:** `codex exec` reads stdin *in addition to* the prompt arg, so under a non-interactive driver (Claude Code's Bash tool, CI, any non-TTY pipeline) it blocks forever waiting on stdin EOF — a silent ~0% CPU hang. The redirect gives it immediate EOF.
@@ -192,7 +193,7 @@ Parse `thread_id` from the `{"type":"thread.started","thread_id":"..."}` line �
 # resume REJECTS -s. Force read-only via -c sandbox_mode, or Codex inherits
 # config.toml (possibly danger-full-access) and could WRITE files. This is the
 # single most important safety line in the skill — verified 2026-06-04.
-codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
+codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --skip-git-repo-check --json \
   -o /tmp/codex-verdict.txt \
   "I revised the plan. Re-review PLAN.md — check whether your prior findings are addressed and flag anything new. End with VERDICT: APPROVED or VERDICT: REVISE." \
   < /dev/null 2>/dev/null >/dev/null
