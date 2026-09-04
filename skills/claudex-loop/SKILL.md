@@ -158,11 +158,11 @@ Phases 0-1 (recon + interrogation) complete — plan locked with the user. MAX_R
 Hand the locked plan to Codex for adversarial review. Mechanics verified end-to-end (2026-06-04) — do not "improve" the invocations below.
 
 ### Prerequisites (verify once, fast)
-- `codex --version` ≥ 0.130 (older CLIs error on the default `gpt-5.5` model).
+- `codex --version` ≥ 0.130 (older CLIs error on the CLI's current default model — the default itself changes over time, so don't assume a specific model name; upgrade the CLI rather than pinning `-m` to work around it).
 - Codex authenticated (prior `codex login`; ChatGPT account is fine). On auth/model error, surface it — don't silently retry.
 - **`--skip-git-repo-check` is REQUIRED on every `codex exec` / `codex exec resume`.** A non-git workspace otherwise dies with `Not inside a trusted directory and --skip-git-repo-check was not specified.` — before the model is reached, with no verdict file and no `thread.started` line, so it looks exactly like an auth failure. `trust_level = "trusted"` in `config.toml` does not substitute for it.
 - Do NOT pin `-m`. Use the config default. Pinning `gpt-5.x-codex` variants 400s on ChatGPT-account auth.
-- **Echo the active model before Round 1** so the user can confirm: read the `model` line from `~/.codex/config.toml` (if absent, report "CLI default"). State it alongside the resolved tunables, e.g. `Reviewer model: CLI default (config unpinned) — codex-cli 0.137.0`. If the user objects, stop and let them adjust config before burning a review round.
+- **Echo the active model before Round 1** so the user can confirm: read the `model` line from `~/.codex/config.toml` (absent = "CLI default"); state it with the resolved tunables. If the user objects, stop and let them adjust config before burning a review round.
 
 ### Tunables (read from args, else default)
 | Var | Default | Meaning |
