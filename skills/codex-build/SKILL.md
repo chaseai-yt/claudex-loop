@@ -13,7 +13,7 @@ Adapted from Peter Steinberger's `codex-first` pattern (agent-scripts), rebuilt 
 
 ## Prerequisites (verify once, fast)
 
-- `codex --version` ≥ 0.130 (older CLIs error on the default `gpt-5.5` model).
+- `codex --version` ≥ 0.130 (older CLIs error on the CLI's current default model — the default itself changes over time, so don't assume a specific model name; upgrade the CLI rather than pinning `-m` to work around it).
 - Codex authenticated (prior `codex login`; ChatGPT account is fine). On auth/model error, surface it — don't silently retry.
 - Do NOT pin `-m` or model config (e.g. `model_reasoning_effort`) unless the user asks. Pinning `gpt-5.x-codex` variants 400s on ChatGPT-account auth; config defaults come from `~/.codex/config.toml`.
 - **Echo the active model at kickoff** so the user can confirm: read the `model` line from `~/.codex/config.toml` (absent = "CLI default"); state it with the resolved tunables. If the user objects, stop before launching the build.
