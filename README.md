@@ -136,7 +136,9 @@ The runner validates a successful CLI turn and a structured review; an empty out
 
 A clean structured result does not prove the model is right. The log preserves coverage, limitations and concrete evidence. Zero findings is valid; a large number of findings is not a quality score. `BLOCKED`, execution failures and exhausted round budgets are surfaced rather than converted to approval.
 
-Codex reviews use the read-only shell sandbox. Claude reviews expose only file reading/search, with customizations disabled and no MCP tools. These boundaries differ: see [runtime details](skills/claudex-loop/references/runtime.md), especially existing Codex MCP configuration. Builders use bounded permissions, and delegated builds require a clean checkout. A worktree preserves unrelated work; it is not itself a security sandbox.
+The inspected fingerprint covers the Git index as well as the working tree: staged blob ids and the staged diff are recorded, so staged content that the working tree no longer shows still changes the fingerprint. An inspection refuses to start while any path's staged content differs from its working-tree content, because the eventual commit would then contain content the inspector never saw. Make the index match the working tree for those paths first; do not stage unrelated work to get past the gate.
+
+Codex reviews use the read-only shell sandbox and ignore the user's `config.toml`, so configured MCP servers, plugins and hooks do not reach the reviewer. Claude reviews expose only file reading/search, with customizations disabled and no MCP tools. These boundaries differ: see [runtime details](skills/claudex-loop/references/runtime.md). Builders use bounded permissions, and delegated builds require a clean checkout. A worktree preserves unrelated work; it is not itself a security sandbox.
 
 ## Development and verification
 

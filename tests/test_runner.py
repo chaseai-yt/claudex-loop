@@ -243,6 +243,70 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(next(f for f in snap["files"] if f["path"] == "delete.py")["kind"], "deleted")
         self.assertEqual(next(f for f in snap["files"] if f["path"] == "existing.py")["sha256"],
                          runner.digest((self.repo / "existing.py").read_bytes()))
+        self.assertIsNotNone(next(f for f in snap["files"] if f["path"] == "existing.py")["index"])
+        self.assertIsNone(next(f for f in snap["files"] if f["path"] == "new.py")["index"])
+        self.assertEqual(snap["divergent_index"], ["existing.py"])
+
+    def test_snapshot_sees_staged_content_hidden_by_working_tree(self):
+        clean = runner.snapshot(self.repo, self.base)
+        self.assertEqual((clean["files"], clean["divergent_index"]), ([], []))
+        (self.repo / "existing.py").write_text("staged version\n")
+        self.git("add", "existing.py")
+        (self.repo / "existing.py").write_text("original\n")
+        self.assertEqual(self.git("status", "--porcelain").strip(), "MM existing.py")
+        hidden = runner.snapshot(self.repo, self.base)
+        self.assertEqual([f["path"] for f in hidden["files"]], ["existing.py"])
+        self.assertEqual(hidden["divergent_index"], ["existing.py"])
+        self.assertNotEqual(hidden["sha256"], clean["sha256"])
+        self.assertNotEqual(hidden["staged_diff_sha256"], clean["staged_diff_sha256"])
+        self.assertEqual(hidden["diff_sha256"], clean["diff_sha256"])
+        self.git("add", "existing.py")
+        self.assertEqual(runner.snapshot(self.repo, self.base)["sha256"], clean["sha256"])
+
+    def test_snapshot_flags_staged_delete_of_present_file_and_staged_add_of_missing_file(self):
+        self.git("rm", "-q", "--cached", "delete.py")
+        (self.repo / "new.py").write_text("brand new\n")
+        self.git("add", "new.py")
+        (self.repo / "new.py").unlink()
+        snap = runner.snapshot(self.repo, self.base)
+        files = {f["path"]: f for f in snap["files"]}
+        self.assertEqual(snap["divergent_index"], ["delete.py", "new.py"])
+        self.assertEqual((files["delete.py"]["kind"], files["delete.py"]["index"]), ("file", None))
+        self.assertEqual(files["new.py"]["kind"], "deleted")
+        self.assertIsNotNone(files["new.py"]["index"])
+
+    def test_staging_unchanged_content_changes_fingerprint(self):
+        (self.repo / "existing.py").write_text("edited\n")
+        unstaged = runner.snapshot(self.repo, self.base)
+        self.git("add", "existing.py")
+        staged = runner.snapshot(self.repo, self.base)
+        self.assertEqual((unstaged["divergent_index"], staged["divergent_index"]), ([], []))
+        self.assertEqual(unstaged["diff_sha256"], staged["diff_sha256"])
+        self.assertNotEqual(unstaged["sha256"], staged["sha256"])
+
+    def test_inspection_refuses_divergent_index(self):
+        (self.repo / "existing.py").write_text("staged version\n")
+        self.git("add", "existing.py")
+        (self.repo / "existing.py").write_text("original\n")
+        code, record, _, error = self.invoke(mode="inspect", extra=("--base", self.base))
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+        self.assertIn("Staged content differs", error)
+        self.assertIn("existing.py", error)
+        self.git("add", "existing.py")
+        (self.repo / "existing.py").write_text("final\n")
+        code, record, _, _ = self.invoke(mode="inspect", extra=("--base", self.base))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["snapshot"]["divergent_index"], [])
+
+    def test_codex_reviews_ignore_user_config_but_builds_keep_it(self):
+        for session in (None, SESSION):
+            for mode in ("review", "inspect"):
+                args = runner.command("codex", mode, self.root, session=session)
+                self.assertIn("--ignore-user-config", args, (mode, session))
+                self.assertIn("--skip-git-repo-check", args)
+            self.assertNotIn("--ignore-user-config", runner.command("codex", "build", self.root, session=session))
+        self.assertNotIn("--ignore-user-config", runner.command("claude", "review", self.root))
 
     def test_inspection_requires_other_provider_and_fresh_session(self):
         code, _, _, error = self.invoke(mode="inspect", extra=("--base", self.base, "--provider", "claude"))
