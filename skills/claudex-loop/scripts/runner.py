@@ -175,7 +175,7 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
             # The shell sandbox does not govern MCP side effects, so a reviewer must not
             # inherit config.toml (MCP servers, plugins, hooks). Auth still uses CODEX_HOME;
             # model and effort come only from explicit --model/--effort.
-            args += ["--ignore-user-config", "--skip-git-repo-check",
+            args += ["--ignore-user-config", "-c", 'web_search="disabled"', "--skip-git-repo-check",
                      "--output-schema", str(run_dir / "schema.json")]
         if model:
             args += ["-m", model]

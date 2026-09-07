@@ -304,6 +304,7 @@ class RunnerTests(unittest.TestCase):
             for mode in ("review", "inspect"):
                 args = runner.command("codex", mode, self.root, session=session)
                 self.assertIn("--ignore-user-config", args, (mode, session))
+                self.assertIn('web_search="disabled"', args)
                 self.assertIn("--skip-git-repo-check", args)
             self.assertNotIn("--ignore-user-config", runner.command("codex", "build", self.root, session=session))
         self.assertNotIn("--ignore-user-config", runner.command("claude", "review", self.root))
