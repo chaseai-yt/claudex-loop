@@ -35,9 +35,23 @@ Both delegated builders reported that their proof commands were blocked locally:
 
 The fixture checks exercise transport and obvious-defect detection, not comparative model quality. No claim is made that one pairing is better or that an APPROVED response proves exhaustive correctness. A future benchmark should compare defect recall, false positives, proof results, time and usage on the same tasks, including sound plans.
 
+## Live model checks — orca executor (`--via orca`)
+
+Development date: 2026-09-08, macOS, real Orca app running.
+
+| Check | Result |
+|---|---|
+| `--via orca --orca-worktree path:<unregistered-repo>` | Failed cleanly: `selector_not_found`, `failure_kind: "defect"` — no silent fallback to subprocess |
+| `--via orca --orca-worktree active` against an unrelated disposable repo, real Astra (Codex CLI 0.153.4) review | `status: completed`, real session UUID, `APPROVED` verdict, real usage tokens |
+| `exit_code.txt` under the run's artifact directory | `0`, matching the CLI's actual exit — confirms the file-captured-exit-code path (not Orca's own unreliable `wait` exitCode field) end to end |
+| `command.json` for that run | The real `codex exec ...` argv, run wrapped in `cd <repo> && ... < prompt.txt > stdout.txt 2> stderr.txt` inside a real Orca terminal targeting a different worktree than the reviewed repo |
+
+This is the first end-to-end run of `--via orca` against a live Orca app and real Codex CLI (all prior coverage was the fake-CLI/fake-`orca` unit suite, 33 tests). It specifically exercises the `--orca-worktree` vs `--repo` binding fixed after independent Codex review (finding 1) and the exit-code-capture workaround (findings 6/independent verification).
+
 ## Limits
 
-- Live review tests were run on Windows. Automated fake-CLI coverage is configured for all three operating systems.
+- Live review tests were run on Windows (bidirectional loop) and macOS (`--via orca` only). Automated fake-CLI coverage is configured for all three operating systems.
+- The orca executor has one live smoke run on `review` mode only; `build`/`inspect` via orca and the Windows-rejection path are unit-tested but not yet live-checked.
 - CLI versions, account access and permission behavior can change; diagnostics identify the selected executable and requested model.
 - Codex's shell sandbox does not constrain external MCP side effects; review existing tool configuration as described in the runtime reference. Claude's adapter instead removes non-reading tools and MCP from the reviewer.
 - Structured-output validation can reject broken transport and inconsistent verdicts, but cannot prove a model's findings or claimed coverage.
