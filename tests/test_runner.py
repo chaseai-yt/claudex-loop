@@ -32,6 +32,9 @@ if case == 'timeout':
 if case == 'exit':
     print('Authentication failed', file=sys.stderr)
     sys.exit(7)
+if case == 'quota':
+    print('Error: rate limit exceeded, please retry later (429)', file=sys.stderr)
+    sys.exit(7)
 if case == 'empty':
     sys.exit(0)
 if case == 'mutate_plan':
@@ -70,6 +73,63 @@ else:
     print(json.dumps([{'type':'system','subtype':'init'}, value] if case == 'array' else value))
 '''
 
+FAKE_ORCA = r'''#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+from pathlib import Path
+
+state_dir = Path(os.environ['FAKE_ORCA_STATE'])
+state_dir.mkdir(parents=True, exist_ok=True)
+
+
+def emit(result):
+    print(json.dumps({'ok': True, 'result': result}))
+
+
+def fail(code, message):
+    print(json.dumps({'ok': False, 'error': {'code': code, 'message': message}}))
+
+
+args = sys.argv[1:]
+if args and args[-1] == '--json':
+    args = args[:-1]
+
+if args[:2] == ['terminal', 'create']:
+    cmd = args[args.index('--command') + 1]
+    handle = 'term_' + os.urandom(4).hex()
+    proc = subprocess.Popen(['bash', '-c', cmd], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    (state_dir / f'{handle}.pid').write_text(str(proc.pid))
+    emit({'terminal': {'handle': handle}})
+elif args[:2] == ['terminal', 'wait']:
+    handle = args[args.index('--terminal') + 1]
+    timeout_ms = int(args[args.index('--timeout-ms') + 1]) if '--timeout-ms' in args else 5000
+    pid = int((state_dir / f'{handle}.pid').read_text())
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            emit({'wait': {'status': 'exited', 'exitCode': 0}})
+            sys.exit(0)
+        time.sleep(0.02)
+    fail('timeout', 'timeout')
+elif args[:2] == ['terminal', 'close']:
+    handle = args[args.index('--terminal') + 1]
+    pid_file = state_dir / f'{handle}.pid'
+    killed = False
+    if pid_file.is_file():
+        try:
+            os.kill(int(pid_file.read_text()), 9)
+            killed = True
+        except ProcessLookupError:
+            pass
+    (state_dir / f'{handle}.closed').write_text('1')
+    emit({'close': {'ptyKilled': killed}})
+else:
+    fail('unsupported', 'unsupported fake orca command')
+'''
+
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):
@@ -83,6 +143,10 @@ class RunnerTests(unittest.TestCase):
         self.artifacts = self.root / "runs"
         self.cli = self.root / "fake_cli.py"
         self.cli.write_text(FAKE_CLI)
+        self.orca = self.root / "fake_orca.py"
+        self.orca.write_text(FAKE_ORCA)
+        self.orca.chmod(0o755)
+        self.orca_state = self.root / "orca-state"
         self.git("init", "-q")
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Test")
@@ -95,13 +159,16 @@ class RunnerTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", *args], cwd=self.repo, stderr=subprocess.PIPE).decode()
 
-    def invoke(self, host="claude", mode="review", case="ok", extra=()):
-        args = [mode, "--host", host, "--repo", str(self.repo), "--plan", str(self.plan),
+    def invoke(self, host="claude", mode="review", case="ok", extra=(), plan=None):
+        plan = plan or self.plan
+        args = [mode, "--host", host, "--repo", str(self.repo), "--plan", str(plan),
                 "--artifacts", str(self.artifacts), *extra]
         old = set(self.artifacts.glob("*/result.json")) if self.artifacts.exists() else set()
         output, error = io.StringIO(), io.StringIO()
+        env = {"FAKE_CASE": case, "FAKE_PLAN": str(plan),
+               "ORCA_CLI_COMMAND": str(self.orca), "FAKE_ORCA_STATE": str(self.orca_state)}
         with patch.object(runner, "cli_prefix", return_value=[sys.executable, str(self.cli)]), \
-             patch.dict(os.environ, {"FAKE_CASE": case, "FAKE_PLAN": str(self.plan)}), \
+             patch.dict(os.environ, env), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
             code = runner.main(args)
         new = set(self.artifacts.glob("*/result.json")) - old if self.artifacts.exists() else set()
@@ -225,6 +292,16 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("timed out", record["error"])
 
+    def test_quota_exhaustion_is_classified_separately_from_defects(self):
+        code, record, _, _ = self.invoke(case="quota")
+        self.assertEqual(code, 1)
+        self.assertEqual(record["failure_kind"], "quota_exhausted")
+
+    def test_generic_cli_failure_defaults_to_defect(self):
+        code, record, _, _ = self.invoke(case="exit")
+        self.assertEqual(code, 1)
+        self.assertEqual(record["failure_kind"], "defect")
+
     def test_unique_artifacts_and_failed_round_does_not_reuse_reply(self):
         _, _, first, _ = self.invoke()
         code, record, second, _ = self.invoke(case="empty")
@@ -286,6 +363,98 @@ class RunnerTests(unittest.TestCase):
         code, _, _, error = self.invoke(extra=("--artifacts", str(self.repo / "runs")))
         self.assertEqual(code, 1)
         self.assertIn("outside", error)
+
+    @unittest.skipIf(os.name == "nt", "orca executor is validated on POSIX shells only")
+    def test_via_orca_and_subprocess_reach_the_same_result(self):
+        for via in ("subprocess", "orca"):
+            with self.subTest(via=via):
+                code, record, _, _ = self.invoke(extra=("--via", via))
+                self.assertEqual(code, 0, record)
+                self.assertEqual(record["executor"], via)
+                self.assertEqual(record["response"]["verdict"], "APPROVED")
+
+    @unittest.skipIf(os.name == "nt", "orca executor is validated on POSIX shells only")
+    def test_via_auto_prefers_orca_when_resolvable(self):
+        code, record, _, _ = self.invoke(extra=("--via", "auto"))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["executor"], "orca")
+
+    @unittest.skipIf(os.name == "nt", "orca executor is validated on POSIX shells only")
+    def test_via_orca_timeout_closes_terminal_and_records_failure(self):
+        code, record, _, _ = self.invoke(case="timeout", extra=("--via", "orca", "--timeout", "1"))
+        self.assertEqual(code, 1)
+        self.assertIn("timed out", record["error"])
+        self.assertTrue(list(self.orca_state.glob("*.closed")),
+                        "execute_via_orca must close the terminal on timeout")
+
+    @unittest.skipIf(os.name == "nt", "orca executor is validated on POSIX shells only")
+    def test_via_orca_uses_file_captured_exit_code_not_orca_reported_one(self):
+        # The fake orca's own `wait` reports a fixed dummy exitCode (mirroring
+        # real Orca's observed unreliable field); the real exit code must
+        # come from the file the launched command wrote, not that field.
+        code, record, path, _ = self.invoke(case="exit", extra=("--via", "orca"))
+        self.assertEqual(code, 1)
+        self.assertEqual(record["exit_code"], 7)
+        self.assertIn("Authentication failed", (path.parent / "stderr.txt").read_text())
+
+    @unittest.skipIf(os.name == "nt", "orca executor is validated on POSIX shells only")
+    def test_via_orca_handles_shell_metacharacters_in_paths(self):
+        # The plan's path only ever appears as inert text *inside*
+        # prompt.txt (read over stdin); it's never interpolated into the
+        # constructed shell command, so it doesn't exercise shlex quoting.
+        # --artifacts does: run_dir (and therefore prompt/stdout/stderr/exit
+        # paths embedded directly in the shell command string) is created
+        # under it.
+        tricky_artifacts = self.root / "art if$acts `tricky`; (parens)"
+        args = ["review", "--host", "claude", "--repo", str(self.repo), "--plan", str(self.plan),
+                "--artifacts", str(tricky_artifacts), "--via", "orca"]
+        env = {"FAKE_CASE": "ok", "FAKE_PLAN": str(self.plan),
+               "ORCA_CLI_COMMAND": str(self.orca), "FAKE_ORCA_STATE": str(self.orca_state)}
+        output, error = io.StringIO(), io.StringIO()
+        with patch.object(runner, "cli_prefix", return_value=[sys.executable, str(self.cli)]), \
+             patch.dict(os.environ, env), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+            code = runner.main(args)
+        results = list(tricky_artifacts.glob("*/result.json")) if tricky_artifacts.exists() else []
+        self.assertEqual(code, 0, error.getvalue())
+        self.assertTrue(results, "expected a result.json under the tricky --artifacts path")
+        record = json.loads(results[0].read_text())
+        self.assertEqual(record["response"]["verdict"], "APPROVED")
+
+    def test_via_orca_rejects_on_windows(self):
+        with patch.object(runner.os, "name", "nt"):
+            with self.assertRaises(runner.RunError):
+                runner.execute_via_orca([sys.executable, str(self.cli)], self.root, 5,
+                                        str(self.orca), self.repo, f"path:{self.repo}")
+
+    def test_via_auto_skips_orca_on_windows(self):
+        # A targeted unit test on the decision itself, not a full run(): a
+        # global os.name patch would also flip execute()'s own Windows
+        # branch, which references subprocess.CREATE_NEW_PROCESS_GROUP -- a
+        # constant that only exists on an actual Windows Python build.
+        with patch.object(runner.os, "name", "nt"):
+            self.assertFalse(runner.should_try_orca("auto"))
+            self.assertTrue(runner.should_try_orca("orca"))
+        # Outside the patch this reflects the *real* host platform running
+        # the suite, which is "nt" on actual Windows CI -- assert the
+        # invariant, not a platform-specific literal.
+        self.assertEqual(runner.should_try_orca("auto"), os.name != "nt")
+
+    def test_via_orca_requires_resolvable_cli(self):
+        output, error = io.StringIO(), io.StringIO()
+        args = ["review", "--host", "claude", "--repo", str(self.repo), "--plan", str(self.plan),
+                "--artifacts", str(self.artifacts), "--via", "orca"]
+        env = dict(os.environ, FAKE_CASE="ok", FAKE_PLAN=str(self.plan), PATH="/nonexistent")
+        env.pop("ORCA_CLI_COMMAND", None)
+        env.pop("ORCA_DEV_REPO_ROOT", None)
+        with patch.object(runner, "cli_prefix", return_value=[sys.executable, str(self.cli)]), \
+             patch.dict(os.environ, env, clear=True), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+            code = runner.main(args)
+        self.assertEqual(code, 1)
+        # --via orca fails inside run()'s own guarded block, so the message lands
+        # in the printed result record (stdout), not a bare stderr traceback.
+        self.assertIn("resolvable Orca CLI", json.loads(output.getvalue())["error"])
 
 
 if __name__ == "__main__":

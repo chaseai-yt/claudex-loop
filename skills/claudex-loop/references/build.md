@@ -8,6 +8,8 @@ Capture the pre-build commit before changing code. For a new project, establish 
 
 The runner requires a clean checkout for delegated builds. Plan/log files written by the loop can themselves make it dirty: keep those artifacts outside the build checkout, or include them in an authorized baseline. When moving to a worktree, re-review the copied plan in that worktree before using its approval there; approval is bound to the repository path. Resolve source paths against the build worktree so the builder cannot accidentally target the original checkout. A worktree is isolation for diffs, not an operating-system sandbox.
 
+`--via orca` (see [runtime](runtime.md)) makes a delegated build visible in Orca's terminal list, but it does not provision isolation by itself: it still runs against `--repo` and still requires that same clean-checkout gate. If you want Orca to provision the isolated worktree too, create it yourself first (`orca worktree create`) and pass that path as both `--repo` and `--orca-worktree`.
+
 ## Delegated build
 
 ```text
