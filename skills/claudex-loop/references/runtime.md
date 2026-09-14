@@ -26,7 +26,7 @@ python RUNNER review --host codex --repo PROJECT --plan docs/implementation.md -
 python RUNNER check --host codex --repo PROJECT --plan docs/implementation.md --approval APPROVED_RESULT
 ```
 
-`--resume` accepts only a successful result from the same provider, mode, repo, plan path and requested model/effort. It resumes that exact UUID and checks the returned UUID. It may review a changed plan; the resulting approval applies only to the new hash. An inspection always starts fresh. `--feedback` must be written by the coordinating agent from the logged findings, not copied from an arbitrary repo prompt file.
+`--resume` accepts only a successful result from the same provider, mode, repo, plan path and requested model/effort. It resumes that exact UUID and checks the returned UUID. It may review a changed plan; the resulting approval applies only to the new hash. A resumed review prompt states the fact: `PLAN UNCHANGED` with that SHA256, or `PLAN CHANGED` with the previous and current SHA256. An inspection always starts fresh. `--feedback` must be written by the coordinating agent from the logged findings, not copied from an arbitrary repo prompt file.
 
 ## Review boundaries
 

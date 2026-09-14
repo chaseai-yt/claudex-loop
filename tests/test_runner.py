@@ -432,6 +432,21 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report["classification"], "progress")
         self.assertEqual(report["rounds"][0]["plan_sha256"], record["plan_sha256"])
 
+    def test_resume_states_whether_the_plan_changed(self):
+        _, first, previous, _ = self.invoke(case="revise")
+        code, _, path, _ = self.invoke(extra=("--resume", str(previous)))
+        self.assertEqual(code, 0)
+        prompt = (path.parent / "prompt.txt").read_text(encoding="utf-8")
+        self.assertIn(f"PLAN UNCHANGED since your previous review (SHA256 {first['plan_sha256']}).", prompt)
+        self.assertIn("do not relitigate resolved items", prompt)
+        self.plan.write_text("New revision", encoding="utf-8")
+        code, second, path, _ = self.invoke(extra=("--resume", str(previous)))
+        self.assertEqual(code, 0)
+        prompt = (path.parent / "prompt.txt").read_text(encoding="utf-8")
+        self.assertIn(f"PLAN CHANGED since your previous review: previous SHA256 {first['plan_sha256']}, "
+                      f"current SHA256 {second['plan_sha256']}.", prompt)
+        self.assertNotIn("PLAN UNCHANGED", prompt)
+
     def test_progress_writes_no_artifacts_and_needs_no_cli(self):
         paths = [self.write_record("r1", "REVISE", [self.finding()]),
                  self.write_record("r2", "APPROVED", [])]

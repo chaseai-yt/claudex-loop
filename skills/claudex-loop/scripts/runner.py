@@ -433,6 +433,12 @@ def run(args) -> int:
     prompt = instructions + f"\nPLAN PATH: {plan}\nPLAN SHA256: {record['plan_sha256']}\n"
     prompt += "<plan>\n" + plan_body.decode("utf-8-sig") + "\n</plan>\n"
     if previous:
+        if args.mode == "review":
+            prompt += (f"PLAN UNCHANGED since your previous review (SHA256 {record['plan_sha256']}).\n"
+                       if previous.get("plan_sha256") == record["plan_sha256"] else
+                       f"PLAN CHANGED since your previous review: previous SHA256 "
+                       f"{previous.get('plan_sha256')}, current SHA256 {record['plan_sha256']}. "
+                       "Re-read the whole plan; findings the revision resolved are resolved.\n")
         prompt += "Check prior findings against this revision; do not relitigate resolved items without new evidence.\n"
     if before:
         save(run_dir / "snapshot.json", before)

@@ -5,7 +5,7 @@ Development date: 2026-09-06. Tests run in disposable fixtures; production repos
 ## Automated checks
 
 - `python scripts/validate.py`: active skill frontmatter, local references, both provider manifests and shared-runner presence.
-- `python -m unittest discover -s tests -v`: **33 passing tests** with fake CLI executables and real temporary Git repositories, without model calls.
+- `python -m unittest discover -s tests -v`: **34 passing tests** with fake CLI executables and real temporary Git repositories, without model calls.
 - Round-progress classification: fingerprint normalization, the BLOCKED comparison barrier, every classification branch, rejected records, and the resumed-review plan-change notice.
 - Codex Skill Creator validator: all three active skills.
 - Codex Plugin Creator validator: `.codex-plugin/plugin.json`.
