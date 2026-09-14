@@ -44,6 +44,26 @@ Validation rejects empty/malformed output, duplicate finding IDs, unsupported se
 
 Records contain the plan SHA256, CLI version, requested model/effort, returned session UUID, usage when available and observed model keys when the provider returns them. Unknown model identity remains unknown. There is no silent model fallback or automatic provider switch.
 
+## Round progress
+
+```text
+python RUNNER progress --host claude --results ROUND1_RESULT ROUND2_RESULT ...
+```
+
+`progress` compares completed review records and classifies the loop. It launches no CLI, consumes no model quota and writes nothing except stdout and stderr.
+
+Inputs are `result.json` files of completed `review` turns, listed in round order. Every record must report the same repo, plan path and provider; `plan_sha256` may differ between rounds, because a revised plan between rounds is the normal case. Each record's review must pass the same structural validation as a live turn. Unreadable JSON, a missing key, a failed or non-review record, an inconsistent review and a mismatch each abort the run naming the offending file. `--repo` and `--plan` are not cross-checked against the records: the records are the source of truth. `--host` is required by the shared parser and unused here.
+
+Output is one JSON object: `classification`; `rounds`, an ordered list carrying `index`, `verdict`, `plan_sha256`, `counts` (high/medium/low) and `fingerprints`; `resolved`, `new`, `persisting` and `reappeared`, fingerprint lists relative to the previous round; and `recommendation`, one advisory sentence.
+
+`classification` is the first match in this order, evaluated on the last record: `approved`, last verdict APPROVED; `blocked`, last verdict BLOCKED; `polish_only`, REVISE with only `low` findings; `regressed`, a high+medium count above the previous round's; `oscillating`, at least three comparable rounds and a fingerprint of the last round that was present earlier, absent later, then returned; `stuck`, a fingerprint set identical to the previous round's; `progress` otherwise.
+
+A BLOCKED round is a comparison barrier. Validation permits a completed BLOCKED record to carry zero findings, so such a record stays in `rounds` but is never a comparison partner and never emits finding transitions. Comparable rounds are the records after the most recent BLOCKED record, or all records when none is BLOCKED. Like a single round, the first REVISE round after a barrier has no previous round, and all four transition lists are empty.
+
+A finding fingerprint is the SHA256 of `severity|path|evidence`, with `severity` lowercased, `path` kept verbatim apart from surrounding whitespace, and `evidence` the full text lowercased with whitespace collapsed to single spaces. Nothing is truncated, and the finding `id` is unused because reviewers renumber between rounds. This detects verbatim and near-verbatim recurrence, not semantic equivalence: a reworded finding looks new, and two distinct defects whose path and evidence text coincide are indistinguishable.
+
+The classification is advisory and cannot approve anything. It cannot prove that two matched findings concern the same defect: the host still arbitrates each finding, and the round budget still binds.
+
 ## Compatibility
 
 Live-tested development baseline: Codex CLI **0.153.4** with **GPT-6 Astra**, and Claude Code **2.1.261** with **Fable 5.1**, on Windows. The older npm Codex CLI 0.144.5 exposed the required flags but Astra rejected it with “requires a newer version of Codex.” A version/help probe alone does not establish model compatibility. Verify the selected binary and account; see the repository's validation record for actual live coverage. The automated suite uses fake CLI processes and does not consume model quota. Optional live smoke tests should use disposable fixtures and an explicit model, never a production build.

@@ -108,6 +108,31 @@ class RunnerTests(unittest.TestCase):
         path = next(iter(new)) if new else None
         return code, json.loads(path.read_text()) if path else None, path, error.getvalue()
 
+    def finding(self, severity="high", path="plan", ident="F1",
+                evidence="Deletion before the copy is verified loses the only copy."):
+        return {"id": ident, "severity": severity, "path": path, "evidence": evidence,
+                "fix": "Verify the new copy before removing the old one."}
+
+    def write_record(self, name, verdict, findings, plan_sha="a" * 64, **overrides):
+        directory = self.artifacts / name
+        directory.mkdir(parents=True, exist_ok=True)
+        record = {"status": "completed", "mode": "review", "provider": "codex",
+                  "repo": str(self.repo), "plan": str(self.plan), "plan_sha256": plan_sha,
+                  "response": {"verdict": verdict, "summary": "Inspected the supplied plan.",
+                               "findings": findings, "coverage": ["custom plan.md"],
+                               "limitations": ["Schema unavailable."] if verdict == "BLOCKED" else []}}
+        record.update(overrides)
+        path = directory / "result.json"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return str(path)
+
+    def invoke_progress(self, paths):
+        output, error = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+            code = runner.main(["progress", "--host", "claude", "--results", *paths])
+        text = output.getvalue().strip()
+        return code, json.loads(text) if text else None, error.getvalue()
+
     def test_host_role_defaults_and_builder_override(self):
         self.assertEqual(runner.resolve_roles("claude")["reviewer"], "codex")
         self.assertEqual(runner.resolve_roles("codex")["reviewer"], "claude")
@@ -286,6 +311,140 @@ class RunnerTests(unittest.TestCase):
         code, _, _, error = self.invoke(extra=("--artifacts", str(self.repo / "runs")))
         self.assertEqual(code, 1)
         self.assertIn("outside", error)
+
+    def test_progress_single_revise_round_reports_progress(self):
+        code, report, error = self.invoke_progress([self.write_record("r1", "REVISE", [self.finding()])])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "progress")
+        self.assertEqual([report["resolved"], report["new"], report["persisting"],
+                          report["reappeared"]], [[], [], [], []])
+        self.assertEqual(len(report["rounds"]), 1)
+        self.assertEqual(report["rounds"][0]["index"], 1)
+        self.assertEqual(report["rounds"][0]["verdict"], "REVISE")
+        self.assertEqual(report["rounds"][0]["counts"], {"high": 1, "medium": 0, "low": 0})
+        self.assertEqual(len(report["rounds"][0]["fingerprints"]), 1)
+        self.assertIn("round budget", report["recommendation"])
+
+    def test_progress_approval_resolves_the_open_finding(self):
+        first = self.write_record("r1", "REVISE", [self.finding()])
+        second = self.write_record("r2", "APPROVED", [], plan_sha="b" * 64)
+        code, report, error = self.invoke_progress([first, second])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "approved")
+        self.assertEqual(report["resolved"], report["rounds"][0]["fingerprints"])
+        self.assertEqual([report["new"], report["persisting"]], [[], []])
+        self.assertEqual(report["rounds"][1]["plan_sha256"], "b" * 64)
+
+    def test_progress_normalizes_evidence_but_keeps_paths_exact(self):
+        first = self.write_record("r1", "REVISE", [self.finding(evidence="Deletion  before\n copy.")])
+        second = self.write_record("r2", "REVISE", [self.finding(ident="R7", evidence="DELETION BEFORE COPY.")])
+        code, report, error = self.invoke_progress([first, second])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "stuck")
+        self.assertEqual(report["persisting"], report["rounds"][0]["fingerprints"])
+        third = self.write_record("r3", "REVISE", [self.finding(path="src/a-b.py")])
+        fourth = self.write_record("r4", "REVISE", [self.finding(path="src/ab.py")])
+        code, report, error = self.invoke_progress([third, fourth])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "progress")
+        self.assertEqual((len(report["resolved"]), len(report["new"])), (1, 1))
+
+    def test_progress_fingerprints_unencodable_evidence(self):
+        path = self.write_record("r1", "REVISE", [self.finding(evidence="\ud800 lone surrogate")])
+        code, report, error = self.invoke_progress([path])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(len(report["rounds"][0]["fingerprints"]), 1)
+
+    def test_progress_detects_a_reappearing_finding(self):
+        first = [self.finding(evidence="The rollback path is never exercised.")]
+        other = [self.finding(severity="medium", evidence="The timeout default is undocumented.")]
+        paths = [self.write_record("r1", "REVISE", first), self.write_record("r2", "REVISE", other),
+                 self.write_record("r3", "REVISE", first)]
+        code, report, error = self.invoke_progress(paths)
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "oscillating")
+        self.assertEqual(report["reappeared"], report["rounds"][0]["fingerprints"])
+
+    def test_progress_detects_regression_in_material_findings(self):
+        first = self.write_record("r1", "REVISE", [self.finding(severity="medium")])
+        second = self.write_record("r2", "REVISE", [self.finding(ident="A", evidence="First defect."),
+                                                    self.finding(ident="B", evidence="Second defect.")])
+        code, report, error = self.invoke_progress([first, second])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "regressed")
+        self.assertEqual(len(report["new"]), 2)
+        self.assertEqual(report["rounds"][1]["counts"], {"high": 2, "medium": 0, "low": 0})
+
+    def test_progress_low_severity_round_is_polish_only(self):
+        code, report, error = self.invoke_progress(
+            [self.write_record("r1", "REVISE", [self.finding(severity="low")])])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "polish_only")
+        self.assertIn("low-severity", report["recommendation"])
+
+    def test_progress_treats_a_blocked_round_as_a_barrier(self):
+        open_finding = [self.finding()]
+        first = self.write_record("r1", "REVISE", open_finding)
+        blocked = self.write_record("r2", "BLOCKED", [])
+        code, report, error = self.invoke_progress([first, blocked])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "blocked")
+        self.assertEqual(report["resolved"], [])
+        third = self.write_record("r3", "REVISE", open_finding)
+        code, report, error = self.invoke_progress([first, blocked, third])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "progress")
+        self.assertEqual([report["resolved"], report["new"], report["persisting"],
+                          report["reappeared"]], [[], [], [], []])
+        fourth = self.write_record("r4", "REVISE", open_finding)
+        code, report, error = self.invoke_progress([first, blocked, third, fourth])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "stuck")
+        self.assertEqual(report["persisting"], report["rounds"][-1]["fingerprints"])
+
+    def test_progress_rejects_foreign_records_and_accepts_a_real_one(self):
+        first = self.write_record("r1", "REVISE", [self.finding()])
+        foreign = self.write_record("r2", "REVISE", [self.finding()], plan=str(self.root / "other plan.md"))
+        code, report, error = self.invoke_progress([first, foreign])
+        self.assertEqual(code, 1)
+        self.assertIsNone(report)
+        self.assertIn(foreign, error)
+        self.assertIn("plan", error)
+        failed = self.write_record("r3", "REVISE", [self.finding()], status="failed")
+        code, _, error = self.invoke_progress([first, failed])
+        self.assertEqual(code, 1)
+        self.assertIn(failed, error)
+        code, _, error = self.invoke_progress([str(self.root / "missing.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("missing.json", error)
+        for name, verdict, findings, overrides in (("r4", "APPROVED", [self.finding()], {}),
+                                                   ("r5", "REVISE", [], {}),
+                                                   ("r6", "REVISE", [self.finding()], {"plan_sha256": None})):
+            with self.subTest(record=name):
+                invalid = self.write_record(name, verdict, findings, **overrides)
+                code, report, error = self.invoke_progress([invalid])
+                self.assertEqual(code, 1)
+                self.assertIsNone(report)
+                self.assertIn(invalid, error)
+        _, record, real, _ = self.invoke(case="revise")
+        code, report, error = self.invoke_progress([str(real)])
+        self.assertEqual(code, 0, error)
+        self.assertEqual(report["classification"], "progress")
+        self.assertEqual(report["rounds"][0]["plan_sha256"], record["plan_sha256"])
+
+    def test_progress_writes_no_artifacts_and_needs_no_cli(self):
+        paths = [self.write_record("r1", "REVISE", [self.finding()]),
+                 self.write_record("r2", "APPROVED", [])]
+        before = {p: p.stat().st_mtime_ns for p in self.root.rglob("*")}
+        forbidden = Exception("progress must not launch a CLI or write files")
+        with patch.object(runner, "cli_prefix", side_effect=forbidden), \
+             patch.object(runner.subprocess, "Popen", side_effect=forbidden), \
+             patch.object(runner, "save", side_effect=forbidden), \
+             patch.object(runner.tempfile, "mkdtemp", side_effect=forbidden):
+            code, report, error = self.invoke_progress(paths)
+        self.assertEqual(code, 0, error)
+        self.assertEqual({p: p.stat().st_mtime_ns for p in self.root.rglob("*")}, before)
+        self.assertEqual(report["classification"], "approved")
 
 
 if __name__ == "__main__":

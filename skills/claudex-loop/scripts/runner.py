@@ -35,6 +35,19 @@ REVIEW_SCHEMA = {
 }
 
 
+RECOMMENDATIONS = {
+    "approved": "Run `check` on the final plan before building.",
+    "blocked": "Resolve the reviewer's stated limitations; a BLOCKED round is not a review.",
+    "polish_only": "Only low-severity advice remains; present it and let the user decide "
+                   "whether another round is worth it.",
+    "regressed": "High/medium findings increased; inspect the last revision before spending another round.",
+    "oscillating": "A previously resolved finding reappeared; arbitrate it explicitly instead of re-editing.",
+    "stuck": "The finding set did not change; the reviewer and the plan disagree: present the "
+             "host position rather than repeating the round.",
+    "progress": "Findings are changing; continue within the round budget.",
+}
+
+
 class RunError(Exception):
     pass
 
@@ -269,6 +282,87 @@ def previous_record(path: Path, repo: Path, plan: Path, provider: str, mode: str
     return record
 
 
+def normalize(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def fingerprint(finding: dict) -> str:
+    """Detect verbatim recurrence of a finding; ids are ignored because reviewers renumber."""
+    return digest("|".join((finding["severity"].lower(), finding["path"].strip(),
+                            normalize(finding["evidence"]))).encode("utf-8", "surrogatepass"))
+
+
+def load_round(path: str, expected: dict) -> dict:
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RunError(f"{path}: unreadable result record ({exc}).") from exc
+    if not isinstance(record, dict):
+        raise RunError(f"{path}: result record must be a JSON object.")
+    if record.get("status") != "completed" or record.get("mode") != "review":
+        raise RunError(f"{path}: progress compares completed review records only.")
+    for key in ("repo", "plan", "provider"):
+        value = record.get(key)
+        if not isinstance(value, str):
+            raise RunError(f"{path}: result record has no {key}.")
+        if expected.setdefault(key, value) != value:
+            raise RunError(f"{path}: {key} differs from the first record; compare one review series.")
+    if not isinstance(record.get("plan_sha256"), str):
+        raise RunError(f"{path}: result record has no plan_sha256.")
+    try:
+        review = validate_review(record.get("response"))
+    except RunError as exc:
+        raise RunError(f"{path}: {exc}") from exc
+    counts, prints = {"high": 0, "medium": 0, "low": 0}, set()
+    for finding in review["findings"]:
+        counts[finding["severity"]] += 1
+        prints.add(fingerprint(finding))
+    return {"verdict": review["verdict"], "plan_sha256": record["plan_sha256"],
+            "counts": counts, "fingerprints": sorted(prints)}
+
+
+def classify(rounds: list) -> tuple:
+    """A completed BLOCKED round may carry no findings, so it is a comparison barrier."""
+    barriers = [i for i, r in enumerate(rounds) if r["verdict"] == "BLOCKED"]
+    comparable = rounds[barriers[-1] + 1:] if barriers else rounds
+    current = rounds[-1]
+    previous = comparable[-2] if len(comparable) > 1 else None
+    last = set(current["fingerprints"])
+    earlier = set(previous["fingerprints"]) if previous else set()
+    older = set().union(*(set(r["fingerprints"]) for r in comparable[:-2]))
+    sets = {"resolved": sorted(earlier - last) if previous else [],
+            "new": sorted(last - earlier) if previous else [],
+            "persisting": sorted(last & earlier) if previous else [],
+            "reappeared": sorted((last - earlier) & older) if previous else []}
+    material = current["counts"]["high"] + current["counts"]["medium"]
+
+    def revived(value: str) -> bool:
+        seen = [value in r["fingerprints"] for r in comparable[:-1]]
+        return any(True in seen[:i] for i, present in enumerate(seen) if not present)
+
+    if current["verdict"] == "APPROVED":
+        name = "approved"
+    elif current["verdict"] == "BLOCKED":
+        name = "blocked"
+    elif not material:
+        name = "polish_only"
+    elif previous and material > previous["counts"]["high"] + previous["counts"]["medium"]:
+        name = "regressed"
+    elif len(comparable) > 2 and any(revived(f) for f in last):
+        name = "oscillating"
+    elif previous and last == earlier:
+        name = "stuck"
+    else:
+        name = "progress"
+    return name, sets
+
+
+def progress_report(rounds: list) -> dict:
+    classification, sets = classify(rounds)
+    return {"classification": classification, "rounds": rounds, **sets,
+            "recommendation": RECOMMENDATIONS[classification]}
+
+
 def run(args) -> int:
     repo = Path(args.repo).resolve(strict=True)
     plan = Path(args.plan)
@@ -385,7 +479,7 @@ def run(args) -> int:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("roles", "review", "build", "inspect", "check"))
+    parser.add_argument("mode", choices=("roles", "review", "build", "inspect", "check", "progress"))
     parser.add_argument("--host", required=True, choices=PROVIDERS,
                         help="Actual host of the user conversation; do not infer from installed binaries.")
     parser.add_argument("--builder", choices=PROVIDERS)
@@ -399,6 +493,8 @@ def main(argv=None) -> int:
     parser.add_argument("--feedback", help="Host-authored UTF-8 dispositions/fix-list file.")
     parser.add_argument("--base", help="Pre-build commit for complete code inspection.")
     parser.add_argument("--approval", help="Successful plan-review result.json.")
+    parser.add_argument("--results", nargs="+",
+                        help="Completed review result.json files of one plan, in round order.")
     parser.add_argument("--unreviewed-spec", action="store_true")
     parser.add_argument("--proof", help="Exact agreed proof command, passed as data to the builder.")
     parser.add_argument("--artifacts", help="Persistent run directory outside the target checkout.")
@@ -409,6 +505,14 @@ def main(argv=None) -> int:
             raise RunError("Timeout must be positive.")
         if args.mode == "roles":
             print(json.dumps(resolve_roles(args.host, args.provider, args.builder), indent=2))
+            return 0
+        if args.mode == "progress":
+            if not args.results:
+                raise RunError("progress requires --results with at least one review result.json.")
+            expected = {}
+            rounds = [{"index": index, **load_round(path, expected)}
+                      for index, path in enumerate(args.results, 1)]
+            print(json.dumps(progress_report(rounds), indent=2))
             return 0
         return run(args)
     except (RunError, OSError, ValueError, subprocess.SubprocessError) as exc:
