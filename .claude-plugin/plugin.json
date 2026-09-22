@@ -1,6 +1,6 @@
 {
   "name": "claudex-loop",
-  "description": "Standalone model routing and one-off handoffs with Claudex Route, plus the full Claudex Loop planning, build and review workflow.",
+  "description": "Standalone model routing and one-off handoffs with Claudex Route, cross-model code review with Claudex Code Review, and the full Claudex Loop planning, build, and review workflow.",
   "author": {
     "name": "Chase AI",
     "url": "https://youtube.com/@chaseai"
@@ -14,5 +14,5 @@
     "adversarial-review",
     "skills"
   ],
-  "version": "2.1.0"
+  "version": "2.2.0"
 }

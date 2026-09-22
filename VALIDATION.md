@@ -5,8 +5,8 @@ Development date: 2026-09-06. Tests run in disposable fixtures; production repos
 ## Automated checks
 
 - `python scripts/validate.py`: active skill frontmatter, local references, both provider manifests and shared-runner presence.
-- `python -m unittest discover -s tests -v`: **23 passing tests** with fake CLI executables and real temporary Git repositories, without model calls.
-- Codex Skill Creator validator: all three active skills.
+- `python -m unittest discover -s tests -v`: **24 passing tests** with fake CLI executables and real temporary Git repositories, without model calls. The 24th pins the two inspector pairings `claudex-code-review` uses from each host.
+- Codex Skill Creator validator: all three active skills at the time of that run.
 - Codex Plugin Creator validator: `.codex-plugin/plugin.json`.
 - `git diff --check`.
 
@@ -28,6 +28,9 @@ GitHub Actions is configured for Windows, macOS and Linux. Local results establi
 | Host independently runs `python -B check.py` on both implementations | All three acceptance checks passed for each implementation |
 | Fresh Astra inspects Fable's code | APPROVED; new untracked addition.py included in the inspected snapshot |
 | Fresh Fable inspects Astra's code | APPROVED; new untracked addition.py included in the inspected snapshot |
+| Astra (Codex CLI 0.155.1) inspects the `claudex-code-review` branch through the skill's Codex pairing, 2026-09-22 | REVISE with two findings on the skill text, both accepted; valid structured output and fresh session UUID |
+| Fable 5.1 (Claude Code 2.1.278) inspects the same snapshot through the skill's `--builder codex` pairing, 2026-09-22 | REVISE; identical snapshot hash to the Astra run, observed model `claude-fable-5-1`. The run smoke-tested the pairing with the same provider as the author; it is not an independent review of the author's code |
+| Claude Code host runs `claudex-code-review` end to end on PR #17 with Astra (Codex CLI 0.156.0) and Fable 5.1 (Claude Code 2.1.280), 2026-09-22 | Both reviews and both cross-examinations completed on one snapshot hash; two findings confirmed across providers, one of them reproduced by a host probe. A missing rule for a host-verified finding that the other provider refutes was found and added |
 
 Fable runs used Claude Code 2.1.261. The Astra test used an explicit CLI executable path rather than changing the user's global installation. The model selection was explicit in both adapters.
 

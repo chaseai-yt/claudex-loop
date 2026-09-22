@@ -1,6 +1,6 @@
 {
   "name": "claudex-loop",
-  "description": "Standalone model routing and one-off handoffs with Claudex Route, plus the full Claudex Loop planning, build and review workflow.",
+  "description": "Standalone model routing and one-off handoffs with Claudex Route, cross-model code review with Claudex Code Review, and the full Claudex Loop planning, build, and review workflow.",
   "author": {
     "name": "Chase AI",
     "url": "https://youtube.com/@chaseai"
@@ -14,13 +14,13 @@
     "adversarial-review",
     "skills"
   ],
-  "version": "2.1.0",
+  "version": "2.2.0",
   "skills": "./skills/",
   "repository": "https://github.com/chaseai-yt/claudex-loop",
   "interface": {
     "displayName": "Claudex Loop",
-    "shortDescription": "Route tasks, plan, build and review across models",
-    "longDescription": "Use standalone Claudex Route to choose a model and make one scoped handoff, or Claudex Loop for the full planning, build and independent review workflow.",
+    "shortDescription": "Route tasks, review code, and plan and build across models",
+    "longDescription": "Use standalone Claudex Route to choose a model and make one scoped handoff, Claudex Code Review to have Claude and Codex independently review a change and reconcile their findings, or Claudex Loop for the full planning, build, and independent review workflow.",
     "developerName": "Chase AI",
     "category": "Productivity",
     "capabilities": [

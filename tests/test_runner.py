@@ -253,6 +253,18 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("fresh session", error)
 
+    def test_code_review_pairings_from_each_host(self):
+        """claudex-code-review runs both providers as inspectors from either host."""
+        (self.repo / "new.py").write_text("under review\n")
+        for host, other in (("claude", "codex"), ("codex", "claude")):
+            with self.subTest(host=host):
+                code, record, _, _ = self.invoke(host, mode="inspect", extra=("--base", self.base))
+                self.assertEqual((code, record["provider"]), (0, other), record)
+                code, record, _, _ = self.invoke(host, mode="inspect",
+                                                 extra=("--base", self.base, "--builder", other))
+                self.assertEqual((code, record["provider"]), (0, host), record)
+                self.assertEqual(record["snapshot"]["base"], self.base)
+
     def test_changed_code_during_inspection_fails(self):
         (self.repo / "new.py").write_text("original new file")
         code, record, _, _ = self.invoke(mode="inspect", case="mutate_code", extra=("--base", self.base))

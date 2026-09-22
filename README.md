@@ -13,6 +13,7 @@ This repository contains separate skills for choosing a model, making a one-off 
 |---|---|---|
 | [`claudex-route`](skills/claudex-route/SKILL.md) | A model recommendation or one scoped handoff | Self-contained; selected CLI needed only for delegation |
 | [`claudex-loop`](skills/claudex-loop/SKILL.md) | Requirements, plan review, implementation, and final inspection | Both CLIs and Python 3.10+ |
+| [`claudex-code-review`](skills/claudex-code-review/SKILL.md) | Cross-model review of a diff, branch, path, or pull request | Shared `claudex-loop` skill, both CLIs |
 | [`codex-review`](skills/codex-review/SKILL.md) | Explicit Codex plan-review compatibility command | Shared `claudex-loop` skill |
 | [`codex-build`](skills/codex-build/SKILL.md) | Explicit Codex builder compatibility command | Shared `claudex-loop` skill |
 
@@ -42,6 +43,18 @@ claudex-route: Pick a suitable model and have it diagnose this failing test read
 For example, Luna may suit a focused fixture-generation task, Terra a bounded implementation, and Astra or Fable a difficult review. These are task-fit recommendations, not a fixed ranking; available models, context, verification, and current pricing matter. Staying with your current model is a valid result. Route is a self-contained instruction skill with no Python dependency; a delegated run requires the selected CLI and account access. It does not use the full loop's approval-binding runner.
 
 Claudex Route runs independently. Use **Claudex Loop** when you want repeated plan review, implementation, and independent inspection.
+
+## Claudex Code Review: two reviewers, one report
+
+Use [`claudex-code-review`](skills/claudex-code-review/SKILL.md) to review a change the way a built-in code review does, with both providers. Claude and Codex each review the same pinned snapshot in a fresh read-only session through the shared runner. The host then sends each reviewer the other's unshared findings for confirmation or refutation, verifies every finding it reports, and lists refuted and disputed findings instead of dropping them. Every reported finding is verified by the host; whether both reviewers raised it or one confirmed the other's is recorded with it, and there is no confidence score. A reviewer that fails or is blocked is reported as an incomplete review, not as a clean one.
+
+```text
+claudex-code-review
+claudex-code-review 42, level=high
+claudex-code-review feature/csv-import, codex_model=gpt-6-astra, --comment
+```
+
+The first reviews the current checkout's change, the second a pull request, and the third a branch. `--comment` posts the report as one PR comment; `--fix` fixes the reported issues in the current checkout. Neither reviewer inherits your conversation, and neither review is a merge decision.
 
 ## The Claudex Loop workflow
 
@@ -78,7 +91,7 @@ Both CLIs must be installed and authenticated for the full cross-provider workfl
 /plugin install claudex-loop@claudex-loop
 ```
 
-Use `/claudex-loop:claudex-route` for a lightweight recommendation or one-off handoff, or `/claudex-loop:claudex-loop`, `/claudex-loop:codex-review`, or `/claudex-loop:codex-build` for the existing workflows. Enable marketplace auto-update in the plugin menu if desired.
+Use `/claudex-loop:claudex-route` for a lightweight recommendation or one-off handoff, `/claudex-loop:claudex-code-review` for a cross-model code review, or `/claudex-loop:claudex-loop`, `/claudex-loop:codex-review`, or `/claudex-loop:codex-build` for the existing workflows. Enable marketplace auto-update in the plugin menu if desired.
 
 ### Codex or manual skill installation
 
