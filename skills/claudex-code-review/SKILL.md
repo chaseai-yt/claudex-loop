@@ -17,6 +17,7 @@ The reviews run through the shared runner's `inspect` mode from the sibling `cla
 | `level` | `medium` | `low`, `medium`, `high`, `xhigh`, or `max`, passed to both CLIs as `--effort`; Codex has no `max`, so pass it `xhigh` |
 | `claude_model`, `codex_model` | each CLI's configuration | Explicit `--model` for that reviewer |
 | `challenge` | `on` | `off` skips the cross-examination calls |
+| `findings_tool` | `on` | `off` prints the whole report as text instead of using a host findings tool |
 | `--comment` | off | Post the final report as one PR comment |
 | `--fix` | off | Fix the reported issues in the working tree after the report |
 
@@ -90,10 +91,12 @@ Print the report in the conversation:
 - Coverage and limitations from each reviewer, and each reviewer's requested and observed model.
 - No emoji and no attribution footer.
 
+In Claude Code, unless `findings_tool=off`, report the findings through the `ReportFindings` tool as well: call it once with `level`, the issues most severe first as `verdict: CONFIRMED`, and the disputed findings as `verdict: PLAUSIBLE`, with who found each in its `summary` and both positions for a disputed one, or an empty list when there are neither. Those findings are then not printed again, except in a `--comment` preview; the rest of the report stays in the conversation. With `findings_tool=off`, or on a host with no such tool, print the whole report.
+
 An `APPROVED` verdict from a reviewer means no material findings within that reviewer's stated coverage. The user decides whether to merge.
 
 ## `--comment` and `--fix`
 
-`--comment` authorizes posting the report once, as a single PR comment with `gh pr comment`, after showing the text in the conversation. For a PR target, post to that PR in its repository. For a branch or no-target review, resolve the PR with `gh pr view BRANCH --json url` in the checkout's repository; when there is none, print the report and say so. Without the flag, print only. Never post inline review comments, an approval, or a request for changes.
+`--comment` authorizes posting the report once, as a single PR comment with `gh pr comment`, after showing the text in the conversation. That text is the full report, issues included. For a PR target, post to that PR in its repository. For a branch or no-target review, resolve the PR with `gh pr view BRANCH --json url` in the checkout's repository; when there is none, print the report and say so. Without the flag, print only. Never post inline review comments, an approval, or a request for changes.
 
 `--fix` applies to the current checkout only, for a no-target or path target; for a PR or branch target, report and stop. Fix the reported issues only, never a refuted, disputed, or out-of-scope finding, even one whose facts you verified; run the repository's tests, and state that the fixes are yours and reviewed by neither provider. Run the review again over the fixed tree to cover them.

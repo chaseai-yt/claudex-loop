@@ -54,7 +54,7 @@ claudex-code-review 42, level=high
 claudex-code-review feature/csv-import, codex_model=gpt-6-astra, --comment
 ```
 
-The first reviews the current checkout's change, the second a pull request, and the third a branch. `--comment` posts the report as one PR comment; `--fix` fixes the reported issues in the current checkout. Neither reviewer inherits your conversation, and neither review is a merge decision.
+The first reviews the current checkout's change, the second a pull request, and the third a branch. In Claude Code, findings are listed through the same findings tool that `code-review` uses, and `findings_tool=off` prints them as text instead. `--comment` posts the report as one PR comment; `--fix` fixes the reported issues in the current checkout. Neither reviewer inherits your conversation, and neither review is a merge decision.
 
 ## The Claudex Loop workflow
 
