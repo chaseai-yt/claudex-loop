@@ -65,11 +65,11 @@ flowchart LR
 
 The user controls consequential decisions and authorization. A request to review a plan does not authorize implementation. A request to plan and implement does not need redundant build approval. Commits, pushes and publication follow the user's existing instructions.
 
-`PLAN.md` records what to build; `PLAN-REVIEW-LOG.md` records the findings, dispositions, models, proof and remaining uncertainty. Both paths are configurable. Detailed CLI diagnostics live in a unique directory outside the target checkout.
+`PLAN.md` records what to build; `PLAN-REVIEW-LOG.md` records the findings, dispositions, models, proof and remaining uncertainty. The runner's `log` command writes each round into it straight from the result file, so findings are never retyped. Both paths are configurable. Detailed CLI diagnostics live in a unique directory outside the target checkout.
 
 ## Install
 
-Both CLIs must be installed and authenticated for the full cross-provider workflow. Python **3.10+** runs the shared adapter; no runtime pip packages or separate API keys are required. Check `codex --version`, `codex login status`, `claude --version` and `claude auth status`. See the [runtime reference](skills/claudex-loop/references/runtime.md) for tested CLI versions and permission boundaries.
+Both CLIs must be installed and authenticated for the full cross-provider workflow. Python **3.10+** runs the shared adapter; no runtime pip packages or separate API keys are required. Run `python skills/claudex-loop/scripts/runner.py doctor` to check both CLIs' versions and logins in one step without spending model quota. See the [runtime reference](skills/claudex-loop/references/runtime.md) for tested CLI versions and permission boundaries.
 
 ### Claude Code plugin
 
@@ -146,7 +146,7 @@ python scripts/validate.py
 python -m unittest discover -s tests -v
 ```
 
-CI runs on Windows, macOS and Linux. Tests cover host routing, both result formats, resumed-session identity, malformed/empty/failed responses, timeout handling, approval invalidation, complete change manifests, and build resumption. Tests use disposable Git repositories and fake CLI processes, without model quota. Live CLI smoke-test results are recorded in [VALIDATION.md](VALIDATION.md).
+CI runs on Windows, macOS and Linux. Tests cover host routing, both result formats, resumed-session identity, malformed/empty/failed responses, provider failure reasons, timeout handling, approval invalidation, complete change manifests (including projects in a monorepo subdirectory), diff truncation, log rendering, the doctor check, and build resumption. Tests use disposable Git repositories and fake CLI processes, without model quota. Live CLI smoke-test results are recorded in [VALIDATION.md](VALIDATION.md).
 
 ## History and credits
 
