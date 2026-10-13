@@ -35,6 +35,20 @@ Both delegated builders reported that their proof commands were blocked locally:
 
 The fixture checks exercise transport and obvious-defect detection, not comparative model quality. No claim is made that one pairing is better or that an APPROVED response proves exhaustive correctness. A future benchmark should compare defect recall, false positives, proof results, time and usage on the same tasks, including sound plans.
 
+## Runner improvements (2026-10-13)
+
+Automated: **31 passing tests** (23 original plus 8 new) covering monorepo-subdirectory snapshots, provider failure reasons, inspection-specific prompts, diff truncation, the mode-dependent build timeout, `log` rendering of successful and failed runs, `doctor`, and `--host` still being required for model-launching modes.
+
+Live, on Windows with Codex CLI 0.162.0 and Claude Code 2.1.296:
+
+| Check | Result |
+|---|---|
+| `doctor` | Both CLIs resolved (Codex through its npm entry point via Node), versions and logins reported, no account identifiers printed |
+| Codex reviews a delete-before-copy plan from the Claude host | REVISE in 46 s; found the data loss, the `SRC == DEST` self-deletion, and a proof command that passes without doing a backup |
+| `log` on that result | Markdown entry with verdict, all findings, coverage, limitations, plan hash and session |
+| Claude Sonnet 5.5 reviews the same plan from the Codex host | REVISE in 19 s; data loss found; observed model `claude-sonnet-5-5` recorded |
+| Codex inspects a Claude-labelled build with a misleading "safe" comment and a weak test | REVISE in 32 s; data loss, self-deletion and the existence-only test assertion reported; `configured_model` recorded as `gpt-6-astra` |
+
 ## Limits
 
 - Live review tests were run on Windows. Automated fake-CLI coverage is configured for all three operating systems.

@@ -20,7 +20,7 @@ Honor `builder=claude|codex`. The inspector is always the other provider. The ho
 
 Model selection is independent of provider roles. Preserve the host's selected model. Review/build CLI calls inherit their own configuration unless `reviewer_model`, `builder_model`, or `inspector_model` is supplied; map these to the runner's `--model` for that invocation. Apply an explicit `*_effort` similarly. Fable 5.1 and GPT-6 Astra are suitable explicit choices, not mandatory pins. A model in the host UI does not prove which model a separate CLI will use. Report requested and observed model information separately; report an unresolved CLI default honestly. Never silently fall back to another model/provider on a failure.
 
-Read [the runtime reference](references/runtime.md) before launching a CLI. Resolve its runner relative to this installed SKILL.md, never relative to the project being reviewed. Use absolute paths when launching it.
+Read [the runtime reference](references/runtime.md) before launching a CLI. Resolve its runner relative to this installed SKILL.md, never relative to the project being reviewed. Use absolute paths when launching it. Run its `doctor` command once before the first launch; fix a failed login or missing CLI before planning around it.
 
 If the user supplies `codex_cli` or `claude_cli`, map the selected provider's executable path to `--cli`. A host app can have a newer working binary than the CLI on PATH; verify the path and version without silently changing global installation or configuration.
 
@@ -69,7 +69,7 @@ With `mode=review`, load the supplied plan, fill only material gaps with the use
 
 Use the shared runner in `review` mode with the actual `--host`, resolved `--plan` and optional model/effort. First round creates a session. Further rounds use `--resume <previous-successful-result.json>` with the same provider/model/effort and a host-authored `--feedback` file containing dispositions. Never use a guessed session id, `--last`, or a build session as a reviewer.
 
-Each successful response contains a verdict, evidence-backed findings, actual coverage and limitations. Preserve the entire response and runner result path in `LOG_FILE`.
+Each successful response contains a verdict, evidence-backed findings, actual coverage and limitations. Append every round, failed ones included, to `LOG_FILE` with the runner's `log` command, passing your dispositions file as `--feedback` once you have arbitrated. Do not retype findings by hand.
 
 - **APPROVED:** no unresolved material defects. Approval is bound to the exact plan path and SHA256. Present remaining low-priority advice and limitations; zero findings is valid and is not proof of exhaustive correctness.
 - **REVISE:** the host arbitrates each finding. Implement warranted plan changes; reject unsupported suggestions with reasons. Record dispositions and send the revised plan to the same reviewer. Avoid relitigating resolved points without new evidence.
@@ -83,7 +83,7 @@ Present the reviewed plan, improvements and remaining limits. If implementation 
 
 The host can implement directly with its normal tools. For a different builder, use the shared runner's `build` mode. Either path must capture the pre-build commit, preserve unrelated user work, and carry the same resolved plan and verification contract.
 
-Run the agreed proof checks, inspect all changed files and review the result through the other provider in a **fresh** `inspect` session. Supply the pre-build commit and builder identity. Reinspection after accepted fixes also uses a fresh session. Log findings and dispositions; rerun affected proof checks after fixes.
+Run the agreed proof checks, inspect all changed files and review the result through the other provider in a **fresh** `inspect` session. Supply the pre-build commit and builder identity (`--builder`), so the inspector knows whose work it is checking. Reinspection after accepted fixes also uses a fresh session. Log each inspection with the runner's `log` command plus dispositions; rerun affected proof checks after fixes.
 
 If the coordinator takes over coding, it has become a builder. Require a fresh other-provider inspection of its changes; never describe the earlier inspection as covering later edits. If both providers contributed code, record authorship and have each inspect the other's changes; do not claim any model independently reviewed code it authored. If the inspection budget is exhausted, report remaining findings and unreviewed edits explicitly for the user's decision.
 

@@ -287,6 +287,83 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("outside", error)
 
+    def test_snapshot_in_monorepo_subdirectory(self):
+        sub = self.repo / "app"
+        sub.mkdir()
+        (sub / "staged.py").write_text("staged new file\n")
+        self.git("add", "app/staged.py")
+        (sub / "untracked.py").write_text("untracked\n")
+        (self.repo / "outside.py").write_text("not part of this project\n")
+        snap = runner.snapshot(sub, self.base)
+        files = {f["path"]: f for f in snap["files"]}
+        self.assertEqual(set(files), {"staged.py", "untracked.py"})
+        self.assertEqual(files["staged.py"]["kind"], "file")
+        self.assertEqual(files["staged.py"]["sha256"], runner.digest((sub / "staged.py").read_bytes()))
+
+    def test_failures_quote_the_provider_reason(self):
+        _, record, _, _ = self.invoke("claude", case="turn_failed")
+        self.assertIn("quota", record["error"])
+        _, record, _, _ = self.invoke("claude", case="exit")
+        self.assertIn("Authentication failed", record["error"])
+
+    def test_inspection_prompt_names_builder_and_differs_from_plan_review(self):
+        (self.repo / "new.py").write_text("print('hi')\n")
+        _, _, review, _ = self.invoke()
+        code, record, inspect, _ = self.invoke(mode="inspect", extra=("--base", self.base, "--builder", "codex"))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["provider"], "claude")
+        prompt = (inspect.parent / "prompt.txt").read_text()
+        self.assertIn("code inspector; codex built", prompt)
+        self.assertIn("new.py", prompt)
+        self.assertNotIn("code inspector", (review.parent / "prompt.txt").read_text())
+
+    def test_large_inspection_diff_is_truncated_and_recorded(self):
+        (self.repo / "existing.py").write_text("x = 1\n" * 2000)
+        code, record, path, _ = self.invoke(mode="inspect", extra=("--base", self.base, "--max-diff-chars", "500"))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["diff_truncated"]["included"], 500)
+        self.assertIn("DIFF TRUNCATED", (path.parent / "prompt.txt").read_text())
+
+    def test_build_gets_a_longer_default_timeout(self):
+        seen = {}
+        with patch.object(runner, "run", side_effect=lambda a: seen.setdefault(a.mode, a.timeout) and 0):
+            runner.main(["build", "--host", "claude"])
+            runner.main(["review", "--host", "claude"])
+        self.assertEqual(seen, {"build": 1800, "review": 600})
+
+    def test_log_appends_findings_and_dispositions(self):
+        _, _, revise, _ = self.invoke(case="revise")
+        note = self.root / "dispositions.md"
+        note.write_text("R1 accepted: copy is verified before delete.\n")
+        log = self.root / "log.md"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(runner.main(["log", "--result", str(revise), "--log", str(log),
+                                          "--feedback", str(note)]), 0)
+        _, _, failed, _ = self.invoke(case="empty")
+        with contextlib.redirect_stdout(out):
+            runner.main(["log", "--result", str(failed), "--log", str(log)])
+        text = log.read_text()
+        self.assertIn("review by codex: REVISE", text)
+        self.assertIn("**R1** (high)", text)
+        self.assertIn("R1 accepted", text)
+        self.assertIn("FAILED", text)
+        self.assertIn("Run failed", text)
+
+    def test_doctor_reports_each_provider(self):
+        out = io.StringIO()
+        with patch.object(runner, "cli_prefix", return_value=[sys.executable, str(self.cli)]), \
+             contextlib.redirect_stdout(out):
+            code = runner.main(["doctor"])
+        report = json.loads(out.getvalue())
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["codex"]["version"], "fake-cli 1.0")
+        self.assertTrue(report["ready"])
+
+    def test_non_log_modes_still_require_host(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            runner.main(["review"])
+
 
 if __name__ == "__main__":
     unittest.main()
