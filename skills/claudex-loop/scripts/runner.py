@@ -87,14 +87,30 @@ def git(repo: Path, *args: str) -> bytes:
 
 
 def snapshot(repo: Path, base: str) -> dict:
-    """Read tracked, staged, deleted and untracked changes without staging anything."""
+    """Fingerprint the commit candidate: index and working tree versus base, plus untracked files."""
     base_id = git(repo, "rev-parse", "--verify", base + "^{commit}").decode().strip()
-    # --no-renames: a staged rename must list its old path as deleted, not drop it.
-    tracked = git(repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base_id, "--")
-    untracked = git(repo, "ls-files", "--others", "--exclude-standard", "-z")
-    names = sorted(set(os.fsdecode(n) for n in (tracked + untracked).split(b"\0") if n))
+
+    def names_of(*diff_args: str) -> set[str]:
+        # --no-renames: a staged rename must list its old path as deleted, not drop it.
+        raw = git(repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", *diff_args, "--")
+        return set(os.fsdecode(n) for n in raw.split(b"\0") if n)
+
+    worktree = names_of(base_id)
+    staged = names_of("--cached", base_id)
+    unstaged = names_of()
+    untracked = set(os.fsdecode(n) for n in
+                    git(repo, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if n)
+    index = {}
+    for entry in git(repo, "ls-files", "--stage", "-z").split(b"\0"):
+        if not entry:
+            continue
+        meta, name = entry.split(b"\t", 1)
+        _mode, oid, stage = meta.split()
+        if stage != b"0":
+            raise RunError(f"Unmerged index entry needs resolution before inspection: {os.fsdecode(name)}")
+        index[os.fsdecode(name)] = oid.decode()
     files = []
-    for name in names:
+    for name in sorted(worktree | staged | untracked):
         path = repo / name
         if path.is_symlink():
             body = os.fsencode(os.readlink(path))
@@ -106,9 +122,15 @@ def snapshot(repo: Path, base: str) -> dict:
             raise RunError(f"Changed directory/submodule needs explicit inspection: {name}")
         else:
             body, kind = b"", "deleted"
-        files.append({"path": name, "kind": kind, "sha256": digest(body)})
+        files.append({"path": name, "kind": kind, "sha256": digest(body), "index": index.get(name)})
     diff = git(repo, "diff", "--no-ext-diff", "--no-textconv", "--binary", base_id, "--")
-    value = {"base": base_id, "files": files, "diff_sha256": digest(diff)}
+    staged_diff = git(repo, "diff", "--no-ext-diff", "--no-textconv", "--binary", "--cached", base_id, "--")
+    # Paths whose staged content is not what the working tree shows: a later commit
+    # would contain content the inspector never saw (including a staged deletion of
+    # a file that is still present, or a staged add whose file was removed).
+    divergent = sorted((staged & unstaged) | (staged & untracked))
+    value = {"base": base_id, "files": files, "diff_sha256": digest(diff),
+             "staged_diff_sha256": digest(staged_diff), "divergent_index": divergent}
     value["sha256"] = digest(json.dumps(value, sort_keys=True).encode())
     return value
 
@@ -357,6 +379,11 @@ def run(args) -> int:
     previous = (previous_record(Path(args.resume), repo, plan, provider, args.mode,
                                 args.model, args.effort) if args.resume else None)
     before = snapshot(repo, args.base) if args.mode == "inspect" else None
+    if before and before["divergent_index"]:
+        raise RunError("Staged content differs from the working tree for: "
+                       + ", ".join(before["divergent_index"])
+                       + ". The commit candidate is ambiguous; make the index match the working "
+                       "tree for these paths (stage the intended version or unstage it), then inspect again.")
     if args.mode == "build":
         if not previous and git(repo, "status", "--porcelain", "--untracked-files=all").strip():
             raise RunError("Build requires a clean checkout. Use an isolated worktree; preserve existing work.")
