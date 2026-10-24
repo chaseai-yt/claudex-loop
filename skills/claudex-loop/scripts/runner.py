@@ -147,7 +147,7 @@ def validate_review(value) -> dict:
 
 
 def codex_mcp_servers(prefix: list[str], repo: Path) -> list[str]:
-    """Name every enabled user/project MCP server so a review can switch each one off.
+    """Name every enabled user/project MCP server so a review or build can switch each one off.
 
     The read-only shell sandbox does not govern MCP side effects (#28). Plugin and app
     servers are removed by --disable; the rest are listed here. Fails closed.
@@ -175,11 +175,12 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
                  ["-c", 'sandbox_mode="workspace-write"'] if session else
                  ["-s", "read-only" if review else "workspace-write"])
         args += ["-c", 'approval_policy="never"', "--json", "-o", str(run_dir / "reply.txt")]
-        # Plugins/apps (computer use, browser) and the notify hook act outside the sandbox.
+        # Plugins/apps (computer use, browser), the notify hook and MCP servers act outside
+        # the sandbox, so reviews and workspace-write builds both switch them off.
         args += ["--disable", "apps", "--disable", "plugins", "-c", "notify=[]"]
+        for name in mcp_off:
+            args += ["-c", f"mcp_servers.{name}.enabled=false"]
         if review:
-            for name in mcp_off:
-                args += ["-c", f"mcp_servers.{name}.enabled=false"]
             args += ["--skip-git-repo-check", "--output-schema", str(run_dir / "schema.json")]
         if model:
             args += ["-m", model]
@@ -420,8 +421,7 @@ def run(args) -> int:
             raise RunError("CLI version probe failed. Check the resolved executable before retrying.")
         record["cli_version"] = version.stdout.decode("utf-8", errors="replace").strip()
         record["executable"] = prefix
-        mcp_off = (codex_mcp_servers(prefix, repo)
-                   if provider == "codex" and args.mode != "build" else [])
+        mcp_off = codex_mcp_servers(prefix, repo) if provider == "codex" else []
         record["disabled_mcp_servers"] = mcp_off
         argv = prefix + command(provider, args.mode, run_dir, args.model, args.effort,
                                 previous["session_id"] if previous else None, mcp_off)

@@ -417,6 +417,31 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("mcp_servers.off.enabled=false", argv)
         self.assertEqual(argv.count("--disable"), 2)
 
+    def test_codex_builds_switch_off_every_mcp_server(self):
+        # A workspace-write build is no safer than a review: MCP tools act outside the
+        # checkout, and the Claude builder already runs with an empty strict MCP config.
+        servers = json.dumps([{"name": "github", "enabled": True}, {"name": "off", "enabled": False}])
+        with patch.dict(os.environ, {"FAKE_MCP": servers}):
+            code, record, _, _ = self.invoke(
+                host="codex", mode="build", case="build",
+                extra=("--builder", "codex", "--provider", "codex",
+                       "--unreviewed-spec", "--proof", "python -m unittest"))
+        self.assertEqual(code, 0, record)
+        argv = json.loads((Path(record["artifacts"]) / "command.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["disabled_mcp_servers"], ["github"])
+        self.assertIn("mcp_servers.github.enabled=false", argv)
+        self.assertNotIn("mcp_servers.off.enabled=false", argv)
+
+    def test_codex_build_fails_closed_when_mcp_listing_is_unusable(self):
+        with patch.dict(os.environ, {"FAKE_MCP": "not json"}):
+            code, record, _, _ = self.invoke(
+                host="codex", mode="build", case="build",
+                extra=("--builder", "codex", "--provider", "codex",
+                       "--unreviewed-spec", "--proof", "python -m unittest"))
+        self.assertEqual((code, record["status"]), (1, "failed"))
+        self.assertIn("MCP server", record["error"])
+        self.assertFalse((self.repo / "built.py").exists())
+
     def test_codex_review_fails_closed_when_mcp_listing_is_unusable(self):
         for listing in ("not json", json.dumps([{"name": "bad name; rm", "enabled": True}])):
             with patch.dict(os.environ, {"FAKE_MCP": listing}):
