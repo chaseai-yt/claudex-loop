@@ -24,8 +24,10 @@ REVIEW_SCHEMA = {
         "summary": {"type": "string"},
         "findings": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
-            "properties": {key: {"type": "string"} for key in
-                           ("id", "severity", "path", "evidence", "fix")},
+            # severity is an enum so structured output cannot emit a value (e.g. "info")
+            # that validate_review would then reject, discarding the whole review.
+            "properties": {**{key: {"type": "string"} for key in ("id", "path", "evidence", "fix")},
+                           "severity": {"type": "string", "enum": ["high", "medium", "low"]}},
             "required": ["id", "severity", "path", "evidence", "fix"],
         }},
         "coverage": {"type": "array", "items": {"type": "string"}},

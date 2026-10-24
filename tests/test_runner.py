@@ -405,6 +405,20 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("repository root", error)
 
+    def test_review_schema_restricts_severity_to_what_validation_accepts(self):
+        # A free-form severity let Claude return "info" for a non-blocking note; the
+        # review was then rejected as a whole. The schema must match validate_review.
+        items = runner.REVIEW_SCHEMA["properties"]["findings"]["items"]
+        self.assertEqual(items["properties"]["severity"]["enum"], ["high", "medium", "low"])
+        self.assertEqual(set(items["properties"]), set(items["required"]))
+        finding = {"id": "F1", "path": "a.py", "evidence": "e", "fix": "f"}
+        for severity in items["properties"]["severity"]["enum"]:
+            runner.validate_review({"verdict": "REVISE", "summary": "s", "coverage": ["a.py"],
+                                    "limitations": [], "findings": [{**finding, "severity": severity}]})
+        with self.assertRaisesRegex(runner.RunError, "severity"):
+            runner.validate_review({"verdict": "APPROVED", "summary": "s", "coverage": ["a.py"],
+                                    "limitations": [], "findings": [{**finding, "severity": "info"}]})
+
     def test_codex_reviews_switch_off_plugins_apps_and_every_mcp_server(self):
         # Issue #28: MCP and plugin tools act outside the read-only shell sandbox.
         servers = json.dumps([{"name": "github", "enabled": True}, {"name": "off", "enabled": False}])
