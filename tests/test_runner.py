@@ -298,6 +298,54 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("invalid int value", error.getvalue())
         self.assertNotIn("[precondition]", error.getvalue())
 
+    def test_provider_error_wording_maps_to_the_right_class(self):
+        # Verbatim provider messages: Codex's from this machine's own logs, Claude Code's from
+        # its published error reference. Provider text is the only evidence classify_text gets.
+        corpus = {
+            "quota": [
+                "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit "
+                "https://chatgpt.com/settings/usage to purchase more credits or try again at 8:38 PM.",
+                "You've hit your session limit", "You've hit your weekly limit",
+                "You've hit your Opus limit", "You've hit your Sonnet limit",
+                "You've hit your monthly spend limit", "You've hit your org's monthly spend limit",
+                "You've hit your team's shared budget", "You've hit your individual usage limit",
+                "spend limit reached", "Request rejected (429)", "Credit balance is too low",
+                "Usage credits required for 1M context", "Error: rate limit exceeded (429)",
+            ],
+            "auth": [
+                "Not logged in \u00b7 Please run /login", "Authentication required \u00b7 Sign in again to continue",
+                "Login expired \u00b7 Please run /login", "Could not resolve authentication method",
+                "Invalid API key", "Your apiKeyHelper script is failing", "OAuth token revoked",
+                "OAuth token has expired", "API Error: 401 Invalid authentication credentials",
+                "Claude login not accepted \u00b7 Run /login, then try again",
+                "This organization has been disabled", "Your account is on hold and can't use Claude Code.",
+                "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+            ],
+            "outage": [
+                "API Error: Repeated 529 Overloaded errors", "Opus is experiencing high load",
+                "Server is temporarily limiting requests", "API Error: 500 Internal server error",
+                "Server error mid-response. The response above may be incomplete.",
+                "Unable to connect to API", "Request timed out", "API Error: No response from API",
+                "API Error: Stream idle timeout - no chunks received", "Connection refused \u2014 ECONNREFUSED",
+                "Can't reach the API server \u2014", "No internet route \u2014", "Connection dropped",
+                "Socket is closed", "Connection lost mid-response", "503 Service Unavailable",
+                "Streaming response ended before any complete data was received",
+            ],
+            "setup": [
+                "SSL certificate verification failed", "unable to get local issuer certificate",
+                "Couldn't connect through your proxy",
+            ],
+        }
+        for expected, messages in corpus.items():
+            for message in messages:
+                with self.subTest(expected=expected, message=message[:50]):
+                    self.assertEqual(runner.classify_text(message), expected)
+        for neutral in ("Missing or ambiguous Codex session/completion event.",
+                        "No such file or directory: reply.txt", "syntax error near unexpected token",
+                        "Traceback (most recent call last): KeyError: 'x'", "exited 7"):
+            with self.subTest(neutral=neutral):
+                self.assertIsNone(runner.classify_text(neutral))
+
     def test_words_in_agent_output_are_not_read_as_the_cause(self):
         # A plan about quota/auth puts those words in Codex's own messages; only error
         # events and stderr are evidence of why the CLI failed.

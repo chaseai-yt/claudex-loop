@@ -71,6 +71,8 @@ A failure is reported on one of two surfaces, and the class means *what to do ab
 
 If the final write of `result.json` itself fails (a full or unavailable artifact directory), the runner exits 1 and reports `[setup]` on stderr, but the record may still read `status: "running"`: treat a `running` record as a failed run, never as an approval. Records are written by atomic replacement, so a failed write leaves the previous record intact rather than truncated.
 
+The causes are recognised from provider wording: Codex messages observed in a real Codex log, and the messages in Claude Code's published error reference (session, weekly and spend limits, overload and connection errors, login and credit problems). The test suite pins those strings verbatim. Wording that matches nothing is `other`, which is a correct answer and not a failure of the classifier. Providers change their messages, and these were matched against recorded and published text, not by provoking a live quota or outage failure, so treat a class as a strong hint.
+
 Classification is advisory. It never causes a retry, a model change or a provider switch, and a class is never an approval: a `quota` result is neither `APPROVED` nor a `BLOCKED` verdict, and `check_approval` rejects it as it rejects any `status` other than `completed`. A provider-reported cause (a failed Codex turn, an errored Claude result) keeps that cause even when the CLI exited 0. For a nonzero exit the cause is read from stderr and from events the provider itself flagged as errors; ordinary agent messages are ignored, because a plan about quota or authentication quotes those words in its own output.
 
 ## Compatibility
