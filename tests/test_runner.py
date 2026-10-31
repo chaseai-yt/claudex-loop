@@ -35,6 +35,20 @@ if case == 'timeout':
 if case == 'exit':
     print('Authentication failed', file=sys.stderr)
     sys.exit(7)
+if case == 'quota_exit':
+    print('Error: rate limit exceeded (429)', file=sys.stderr)
+    sys.exit(1)
+if case == 'outage_exit':
+    print('503 Service Unavailable', file=sys.stderr)
+    sys.exit(1)
+if case == 'model_unavailable':
+    print(json.dumps({'type':'thread.started', 'thread_id':'12345678-1234-4567-8123-123456789abc'}))
+    print(json.dumps({'type':'error', 'message':'The gpt-x model is not supported when using Codex with a ChatGPT account.'}))
+    sys.exit(1)
+if case == 'chatty_exit':
+    print(json.dumps({'type':'item.completed', 'item':{'type':'agent_message',
+          'text':'The plan covers quota, rate limit and authentication handling.'}}))
+    sys.exit(1)
 if case == 'empty':
     sys.exit(0)
 if case == 'mutate_plan':
@@ -60,8 +74,14 @@ if case == 'arrow':
     review['summary'] = 'Sound ' + chr(0x2192) + ' ok'
 if 'exec' in sys.argv:
     output = pathlib.Path(sys.argv[sys.argv.index('-o')+1])
-    output.write_text('Built; proof passed.' if case == 'build' else json.dumps(review))
-    print(json.dumps({'type':'thread.started', 'thread_id':session}))
+    if case == 'bad_utf8':
+        output.write_bytes(bytes([255, 254]) + b' not json')
+    elif case == 'no_reply':
+        pass
+    else:
+        output.write_text('Built; proof passed.' if case == 'build' else json.dumps(review))
+    started = {'type':'thread.started'} if case == 'no_thread_id' else {'type':'thread.started', 'thread_id':session}
+    print(json.dumps(started))
     if case == 'turn_failed':
         print(json.dumps({'type':'turn.failed', 'error':{'message':'quota'}}))
     elif case != 'incomplete':
@@ -72,8 +92,15 @@ else:
              'modelUsage':{'claude-test':{'inputTokens':10}},'usage':{'input_tokens':10}}
     if case == 'turn_failed':
         value.update(subtype='error_during_execution',is_error=True)
+    if case == 'model_usage_null':
+        value['modelUsage'] = None
+    if case == 'model_usage_int':
+        value['modelUsage'] = 5
     print(json.dumps([{'type':'system','subtype':'init'}, value] if case == 'array' else value))
 '''
+
+
+RunError_ = runner.RunError
 
 
 class RunnerTests(unittest.TestCase):
@@ -169,6 +196,257 @@ class RunnerTests(unittest.TestCase):
         code, record, _, _ = self.invoke(case="incomplete")
         self.assertEqual(code, 1)
         self.assertEqual(record["status"], "failed")
+
+    def test_codex_event_without_thread_id_is_rejected_by_the_parser(self):
+        code, record, _, _ = self.invoke(case="no_thread_id")
+        self.assertEqual(code, 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertNotIn("response", record)
+        self.assertIn("has no thread_id", record["error"])
+
+    def test_codex_reply_that_is_not_utf8_fails_closed_with_a_clear_error(self):
+        code, record, _, _ = self.invoke(case="bad_utf8")
+        self.assertEqual(code, 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertNotIn("response", record)
+        self.assertIn("not valid UTF-8", record["error"])
+
+    def test_failure_class_and_phase_by_cause(self):
+        # (fake case, expected class, expected phase)
+        table = [
+            ("exit", "auth", "execute"),               # "Authentication failed"
+            ("quota_exit", "quota", "execute"),
+            ("outage_exit", "outage", "execute"),
+            ("model_unavailable", "auth", "execute"),  # model_not_found is entitlement, not outage
+            ("turn_failed", "quota", "parse"),         # provider-reported failure keeps its own cause
+            ("empty", "protocol", "parse"),
+            ("malformed", "protocol", "parse"),
+            ("incomplete", "protocol", "parse"),
+            ("no_thread_id", "protocol", "parse"),
+            ("bad_utf8", "protocol", "parse"),
+            ("no_reply", "setup", "parse"),            # local file fault, never protocol
+            ("mutate_plan", "integrity", "verify"),
+        ]
+        for case, expected_class, expected_phase in table:
+            with self.subTest(case=case):
+                code, record, _, error = self.invoke(case=case)
+                self.assertEqual(code, 1)
+                self.assertEqual(record["status"], "failed")
+                self.assertEqual((record["failure_class"], record["failure_phase"]),
+                                 (expected_class, expected_phase))
+                self.assertIn(f"[{expected_class}]", error)
+
+    def test_null_model_usage_is_tolerated_metadata(self):
+        code, record, _, _ = self.invoke("codex", case="model_usage_null")  # codex host -> Claude reviewer
+        self.assertEqual(code, 0)
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(record["observed_models"], [])
+
+    def test_unexpected_exception_type_never_leaves_a_running_record(self):
+        code, record, path, _ = self.invoke("codex", case="model_usage_int")
+        self.assertEqual(code, 1)
+        self.assertNotEqual(record["status"], "running")
+        self.assertEqual((record["status"], record["failure_class"], record["failure_phase"]),
+                         ("failed", "protocol", "parse"))
+        self.assertEqual(json.loads(path.read_text())["status"], "failed")
+
+    def test_resume_file_that_is_not_a_result_object_is_a_precondition(self):
+        for body in ("[]", "null", '"x"', "7"):
+            with self.subTest(body=body):
+                bad = self.root / "bad-resume.json"
+                bad.write_text(body)
+                code, record, path, error = self.invoke(extra=("--resume", str(bad)))
+                self.assertEqual(code, 1)
+                self.assertIsNone(path)
+                self.assertIn("[precondition]", error)
+                self.assertNotIn("Traceback", error)
+
+    def test_failure_to_persist_the_final_record_is_setup_not_precondition(self):
+        real = runner.save
+
+        def flaky(path, value):
+            if Path(path).name == "result.json" and value.get("status") != "running":
+                raise OSError("disk full")
+            return real(path, value)
+
+        with patch.object(runner, "save", flaky):
+            code, record, path, error = self.invoke()
+        self.assertEqual(code, 1)                      # a run we could not record is never a success
+        self.assertEqual(record["status"], "running")  # documented: treat a running record as failed
+        self.assertIn("[setup]", error)
+        self.assertNotIn("[precondition]", error)
+        self.assertIn("Could not persist", error)
+
+    def test_save_replaces_atomically_and_leaves_no_temp_file(self):
+        target = self.root / "result.json"
+        runner.save(target, {"a": 1})
+        runner.save(target, {"a": 2})
+        self.assertEqual(json.loads(target.read_text()), {"a": 2})
+        self.assertEqual([p.name for p in self.root.glob("result.json*")], ["result.json"])
+        # A write that fails part-way must leave the previous record intact and no debris.
+        with patch.object(runner.os, "replace", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                runner.save(target, {"a": 3})
+        self.assertEqual(json.loads(target.read_text()), {"a": 2})
+        self.assertEqual([p.name for p in self.root.glob("result.json*")], ["result.json"])
+
+    def test_malformed_command_line_is_rejected_by_argparse_unclassified(self):
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as caught:
+            runner.main(["review", "--host", "claude", "--timeout", "nope"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("invalid int value", error.getvalue())
+        self.assertNotIn("[precondition]", error.getvalue())
+
+    def test_provider_error_wording_maps_to_the_right_class(self):
+        # Verbatim provider messages: Codex's from this machine's own logs, Claude Code's from
+        # its published error reference. Provider text is the only evidence classify_text gets.
+        corpus = {
+            "quota": [
+                "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit "
+                "https://chatgpt.com/settings/usage to purchase more credits or try again at 8:38 PM.",
+                "You've hit your session limit", "You've hit your weekly limit",
+                "You've hit your Opus limit", "You've hit your Sonnet limit",
+                "You've hit your monthly spend limit", "You've hit your org's monthly spend limit",
+                "You've hit your team's shared budget", "You've hit your individual usage limit",
+                "spend limit reached", "Request rejected (429)", "Credit balance is too low",
+                "Usage credits required for 1M context", "Error: rate limit exceeded (429)",
+            ],
+            "auth": [
+                "Not logged in \u00b7 Please run /login", "Authentication required \u00b7 Sign in again to continue",
+                "Login expired \u00b7 Please run /login", "Could not resolve authentication method",
+                "Invalid API key", "Your apiKeyHelper script is failing", "OAuth token revoked",
+                "OAuth token has expired", "API Error: 401 Invalid authentication credentials",
+                "Claude login not accepted \u00b7 Run /login, then try again",
+                "This organization has been disabled", "Your account is on hold and can't use Claude Code.",
+                "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+            ],
+            "outage": [
+                "API Error: Repeated 529 Overloaded errors", "Opus is experiencing high load",
+                "Server is temporarily limiting requests", "API Error: 500 Internal server error",
+                "Server error mid-response. The response above may be incomplete.",
+                "Unable to connect to API", "Request timed out", "API Error: No response from API",
+                "API Error: Stream idle timeout - no chunks received", "Connection refused \u2014 ECONNREFUSED",
+                "Can't reach the API server \u2014", "No internet route \u2014", "Connection dropped",
+                "Socket is closed", "Connection lost mid-response", "503 Service Unavailable",
+                "Streaming response ended before any complete data was received",
+                "Login service temporarily unavailable (503)", "Authentication service unavailable",
+                "OAuth server returned 502 Bad Gateway",
+            ],
+            "setup": [
+                "SSL certificate verification failed", "unable to get local issuer certificate",
+                "Couldn't connect through your proxy",
+            ],
+        }
+        for expected, messages in corpus.items():
+            for message in messages:
+                with self.subTest(expected=expected, message=message[:50]):
+                    self.assertEqual(runner.classify_text(message), expected)
+        for neutral in ("Missing or ambiguous Codex session/completion event.",
+                        "No such file or directory: reply.txt", "syntax error near unexpected token",
+                        "Traceback (most recent call last): KeyError: 'x'", "exited 7"):
+            with self.subTest(neutral=neutral):
+                self.assertIsNone(runner.classify_text(neutral))
+
+    def test_words_in_agent_output_are_not_read_as_the_cause(self):
+        # A plan about quota/auth puts those words in Codex's own messages; only error
+        # events and stderr are evidence of why the CLI failed.
+        code, record, _, _ = self.invoke(case="chatty_exit")
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("other", "execute"))
+
+    def test_class_does_not_depend_on_an_exit_code(self):
+        code, record, _, _ = self.invoke(case="timeout", extra=("--timeout", "1"))
+        self.assertEqual(code, 1)
+        self.assertNotIn("exit_code", record)
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("timeout", "execute"))
+        # The opposite direction: exit 0 with a malformed review is still a protocol fault.
+        code, record, _, _ = self.invoke(case="malformed")
+        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["failure_class"], "protocol")
+
+    def test_preparation_oserror_is_setup_not_other(self):
+        code, record, _, _ = self.invoke(extra=("--feedback", str(self.root / "missing.txt")))
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("setup", "prepare"))
+
+    def test_launch_oserror_in_execute_phase_is_setup(self):
+        with patch.object(runner, "execute", side_effect=OSError("spawn failed")):
+            code, record, _, _ = self.invoke()
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("setup", "execute"))
+
+    def test_no_parse_phase_failure_is_ever_other(self):
+        for exc in (KeyError("x"), RunError_("y"), ValueError("z"), subprocess.SubprocessError("w")):
+            with self.subTest(exc=type(exc).__name__):
+                with patch.object(runner, "parse_result", side_effect=exc):
+                    code, record, _, _ = self.invoke()
+                self.assertEqual((record["failure_class"], record["failure_phase"]), ("protocol", "parse"))
+        with patch.object(runner, "parse_result", side_effect=OSError("disk")):
+            code, record, _, _ = self.invoke()
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("setup", "parse"))
+
+    def test_any_ordinary_exception_finalises_the_record(self):
+        # Hard-coding handler types has been wrong three times running (TypeError, AttributeError,
+        # RecursionError). The record already says "running", so no Exception may strand it.
+        for exc in (RecursionError("deep"), RuntimeError("odd"), ZeroDivisionError("x"), IndexError("y")):
+            with self.subTest(exc=type(exc).__name__):
+                with patch.object(runner, "parse_result", side_effect=exc):
+                    code, record, path, _ = self.invoke()
+                self.assertEqual(code, 1)
+                self.assertEqual(json.loads(path.read_text())["status"], "failed")
+                self.assertEqual((record["failure_class"], record["failure_phase"]), ("protocol", "parse"))
+                self.assertIn(type(exc).__name__, record["error"])  # unanticipated types are named
+
+    def test_known_exception_types_keep_their_error_text_unchanged(self):
+        with patch.object(runner, "parse_result", side_effect=runner.RunError("exact text")):
+            code, record, _, _ = self.invoke()
+        self.assertEqual(record["error"], "exact text")
+
+    def test_keyboard_interrupt_is_not_swallowed_as_a_failure(self):
+        with patch.object(runner, "parse_result", side_effect=KeyboardInterrupt()):
+            with self.assertRaises(KeyboardInterrupt):
+                self.invoke()
+
+    def test_malformed_approval_shapes_are_preconditions_not_tracebacks(self):
+        for body in ("[]", "null", '"x"', '{"status":"completed","mode":"review","response":[]}',
+                     '{"status":"completed","mode":"review","response":"APPROVED"}'):
+            with self.subTest(body=body):
+                approval = self.root / "bad-approval.json"
+                approval.write_text(body)
+                code, record, path, error = self.invoke(mode="check", extra=("--approval", str(approval)))
+                self.assertEqual(code, 1)
+                self.assertIsNone(path)
+                self.assertIn("[precondition]", error)
+                self.assertIn("APPROVED plan review is required", error)
+
+    def test_code_changed_during_inspection_is_integrity(self):
+        (self.repo / "new.py").write_text("original new file")
+        code, record, _, _ = self.invoke(mode="inspect", case="mutate_code", extra=("--base", self.base))
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("integrity", "verify"))
+
+    def test_pre_record_failure_writes_no_result_and_is_a_precondition(self):
+        code, record, path, error = self.invoke(mode="inspect")  # no --base
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+        self.assertIsNone(path)
+        self.assertIn("[precondition]", error)
+        self.assertIn("Inspection requires --base", error)
+
+    def test_completed_run_carries_no_failure_fields(self):
+        code, record, _, error = self.invoke()
+        self.assertEqual(code, 0)
+        self.assertNotIn("failure_class", record)
+        self.assertNotIn("failure_phase", record)
+        self.assertNotIn("[", error)
+
+    def test_failure_class_never_approves_or_substitutes_a_provider(self):
+        code, record, path, _ = self.invoke(case="quota_exit")
+        self.assertEqual(record["provider"], "codex")
+        self.assertNotIn("response", record)
+        with self.assertRaises(runner.RunError):
+            runner.check_approval(record, self.plan, self.repo)
+
+    def test_every_failure_class_has_a_remediation_hint(self):
+        self.assertEqual(set(runner.REMEDIATION), set(runner.FAILURE_CLASSES))
+        self.assertEqual(len(runner.FAILURE_CLASSES), 9)
 
     def test_claude_array_envelope(self):
         code, record, _, _ = self.invoke("codex", case="array")

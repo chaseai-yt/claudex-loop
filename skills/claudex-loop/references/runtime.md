@@ -13,7 +13,7 @@ python RUNNER review --host claude --repo PROJECT --plan docs/implementation.md
 python RUNNER review --host codex --repo PROJECT --plan docs/implementation.md
 ```
 
-For an explicit model choice, add e.g. `--model gpt-6-astra --effort high` to a Codex call, or `--model claude-fable-5-1` to a Claude call. Omit these to use CLI configuration. Repeat explicit model/effort choices when resuming; the runner refuses mismatches. No global configuration is changed.
+For an explicit model choice, add e.g. `--model gpt-6-astra --effort high` to a Codex call, or `--model claude-fable-5-1` to a Claude call. Omit these to use CLI configuration. These model names are examples: which models run depends on the account (see Compatibility). Repeat explicit model/effort choices when resuming; the runner refuses mismatches. No global configuration is changed.
 
 For `build`, `--provider` must match the resolved builder. Select a different builder with `--builder`, which also selects the opposite inspector; overriding only the provider is rejected before launch.
 
@@ -50,8 +50,37 @@ Validation rejects empty/malformed output, duplicate finding IDs, unsupported se
 
 Records contain the plan SHA256, CLI version, requested model/effort, returned session UUID, usage when available and observed model keys when the provider returns them. For Codex, which reports no model, the runner also records `effective_model`, `effective_effort` and `effective_sandbox` when it can read them from Codex's session rollout under `$CODEX_HOME`. These are the settings the client applied, not a server confirmation, and are omitted when the rollout is missing. Unknown model identity remains unknown. There is no silent model fallback or automatic provider switch.
 
+## Failure classes
+
+A failure is reported on one of two surfaces, and the class means *what to do about it*:
+
+- **Recorded:** the failure happened after `result.json` was created. The record carries `failure_class` and `failure_phase` (`prepare`, `execute`, `parse` or `verify`, where it happened) beside `status: "failed"` and the unchanged `error` text. Completed runs carry neither field.
+- **Pre-record:** the failure happened before the record existed: a requirement the runner checks itself, such as a missing `--base`, a dirty checkout, a bad `--resume`, a non-positive `--timeout`, `check` or `roles`. No `result.json` is written. The class is `precondition` and appears only on the stderr line after the error. A malformed command line (an unknown flag, a non-integer `--timeout`) is rejected earlier by argument parsing with exit status 2 and a usage message, and is not classified.
+
+| Class | Meaning | Typical cause |
+|---|---|---|
+| `quota` | Provider quota or rate limit | Usage limit, HTTP 429 |
+| `auth` | Login or model entitlement | Expired login, `model_not_found` for an unavailable model |
+| `outage` | Provider or network outage | HTTP 5xx, connection reset, DNS failure |
+| `timeout` | Killed by `--timeout` or interrupted | No exit code exists |
+| `protocol` | The provider's output failed validation | Malformed review, missing or ambiguous session event, non-UTF-8 reply, or a provider-reported failed turn with no recognisable cause |
+| `setup` | A local step failed | Unreadable feedback file, missing CLI, a missing `stdout.txt` or `reply.txt` |
+| `integrity` | The plan or code changed during the run | Plan edited mid-review, code changed during inspection, builder moved `HEAD` |
+| `precondition` | A requirement was unmet before any run started | Missing `--base`, dirty checkout, `--repo` not the root |
+| `other` | No cause recognised | A nonzero exit whose output names none |
+
+If the final write of `result.json` itself fails (a full or unavailable artifact directory), the runner exits 1 and reports `[setup]` on stderr, but the record may still read `status: "running"`: treat a `running` record as a failed run, never as an approval. Records are written by atomic replacement, so a failed write leaves the previous record intact rather than truncated.
+
+The causes are recognised from provider wording: Codex messages observed in a real Codex log, and the messages in Claude Code's published error reference (session, weekly and spend limits, overload and connection errors, login and credit problems). The test suite pins those strings verbatim. When one message names both an outage and an auth word (for example “Login service temporarily unavailable (503)”), the outage wins, because the caller should retry later rather than re-authenticate. Wording that matches nothing is `other`, which is a correct answer and not a failure of the classifier. Providers change their messages, and these were matched against recorded and published text, not by provoking a live quota or outage failure, so treat a class as a strong hint.
+
+Once a record exists, any ordinary exception finalises it as `failed` with a class chosen by phase; none can leave it reading `running`. An exception type the runner did not anticipate is named in `error` (for example `RecursionError: …`) so a genuine bug is visible rather than hidden. `KeyboardInterrupt` is not caught and still ends the process.
+
+Classification is advisory. It never causes a retry, a model change or a provider switch, and a class is never an approval: a `quota` result is neither `APPROVED` nor a `BLOCKED` verdict, and `check_approval` rejects it as it rejects any `status` other than `completed`. A provider-reported cause (a failed Codex turn, an errored Claude result) keeps that cause even when the CLI exited 0. For a nonzero exit the cause is read from stderr and from events the provider itself flagged as errors; ordinary agent messages are ignored, because a plan about quota or authentication quotes those words in its own output.
+
 ## Compatibility
 
 Live-tested development baseline: Codex CLI **0.153.4** with **GPT-6 Astra**, and Claude Code **2.1.261** with **Fable 5.1**, on Windows. The older npm Codex CLI 0.144.5 exposed the required flags but Astra rejected it with “requires a newer version of Codex.” A version/help probe alone does not establish model compatibility. Verify the selected binary and account; see the repository's validation record for actual live coverage. The automated suite uses fake CLI processes and does not consume model quota. Optional live smoke tests should use disposable fixtures and an explicit model, never a production build.
+
+Model availability is per account, not per CLI version. A model the CLI accepts can still be refused by the account, and that includes a model pinned in the user's own Codex `config.toml`. On a ChatGPT-authenticated Codex account the turn then fails with HTTP 400 `model_not_found` (“not supported when using Codex with a ChatGPT account”), which the runner records as `status: "failed"` with `stdout.txt` retained. That is a configuration failure, not an approval, a `BLOCKED` verdict or a quota failure, and it does not consume a review round. Pass an explicit `--model` that the account can serve. The runner never substitutes one, and a bare `codex exec` with no runner fails the same way, which distinguishes this from a runner fault. The baseline above is a dated record from one account; do not assume it holds on another.
 
 Primary references: [Claude programmatic usage](https://code.claude.com/docs/en/headless), [Claude CLI](https://code.claude.com/docs/en/cli-reference), [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode).
