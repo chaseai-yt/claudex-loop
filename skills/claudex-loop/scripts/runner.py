@@ -50,10 +50,19 @@ REMEDIATION = {
     "precondition": "A requirement was not met before any run started. Fix the argument or checkout state named above.",
     "other": "Unclassified failure. Inspect stdout.txt and stderr.txt in the artifact directory.",
 }
-# Provider wording only, checked in order so an entitlement error is never read as an outage.
+# Provider wording only, checked in order. An explicit outage (503, unavailable, overloaded) outranks
+# incidental words like "login" in the same message; entitlement errors are never read as outages.
 # Sources: Codex messages seen in this machine's own logs, and Claude Code's published error
 # reference. Anything unmatched falls through to "other" rather than guessing a cause.
 _CAUSES = (
+    ("outage", re.compile(r"overloaded|high load|temporarily (?:unavailable|limiting requests)|"
+                          r"service unavailable|bad gateway|gateway time-?out|server error mid-response|"
+                          r"unable to connect|can.t reach the api|no internet route|"
+                          r"connection (?:reset|refused|aborted|dropped|lost)|econn(?:reset|refused)|"
+                          r"enotfound|getaddrinfo|socket is closed|no response from api|stream idle timeout|"
+                          r"request timed out|streaming response ended|network (?:is )?unreachable|"
+                          r"could not resolve host|\b(?:status|http)\W{0,4}5\d\d\b|"
+                          r"\b5\d\d (?:internal|bad|service|gateway)")),
     ("auth", re.compile(r"model_not_found|not supported when using codex|not logged in|authentication|"
                         r"unauthori[sz]ed|invalid api key|oauth token (?:has )?(?:expired|revoked)|expired token|"
                         r"apikeyhelper|please run /login|\blogin\b|organization has been disabled|"
@@ -61,14 +70,6 @@ _CAUSES = (
     ("quota", re.compile(r"rate.?limit|quota|usage limit|hit your [\w'\u2019 ]{0,40}limit|shared budget|"
                          r"spend limit|credit balance is too low|usage credits required|too many requests|"
                          r"\(429\)|\b(?:status|http)\W{0,4}429\b")),
-    ("outage", re.compile(r"overloaded|high load|temporarily (?:unavailable|limiting requests)|"
-                          r"service unavailable|bad gateway|gateway time-?out|server error mid-response|"
-                          r"unable to connect|can.t reach the api|no internet route|"
-                          r"connection (?:reset|refused|aborted|dropped|lost)|econn(?:reset|refused)|"
-                          r"enotfound|getaddrinfo|socket is closed|no response from api|stream idle timeout|"
-                          r"request timed out|streaming response ended|network (?:is )?unreachable|"
-                          r"could not resolve|\b(?:status|http)\W{0,4}5\d\d\b|"
-                          r"\b5\d\d (?:internal|bad|service|gateway)")),
     ("setup", re.compile(r"ssl certificate|local issuer certificate|certificate verification|"
                          r"couldn.t connect through your proxy")),
 )
@@ -411,8 +412,10 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
 
 
 def check_approval(record: dict, plan: Path, repo: Path, plan_body: bytes | None = None) -> None:
-    if (record.get("status") != "completed" or record.get("mode") != "review"
-            or record.get("response", {}).get("verdict") != "APPROVED"):
+    response = record.get("response") if isinstance(record, dict) else None
+    if (not isinstance(record, dict) or not isinstance(response, dict)
+            or record.get("status") != "completed" or record.get("mode") != "review"
+            or response.get("verdict") != "APPROVED"):
         raise RunError("A completed APPROVED plan review is required.")
     if record.get("repo") != str(repo) or record.get("plan") != str(plan):
         raise RunError("Approval belongs to a different repository or plan path.")
@@ -557,9 +560,11 @@ def run(args) -> int:
                 raise RunError("Builder changed HEAD despite the no-commit contract. Inspect before proceeding.")
             record["snapshot"] = snapshot(repo, args.base)
         record["status"] = "completed"
-    except (RunError, OSError, ValueError, KeyError, TypeError, AttributeError,
-            subprocess.SubprocessError) as exc:
-        record.update(status="failed", error=str(exc),
+    except Exception as exc:
+        # The record already says "running": no ordinary exception may strand it. Known types keep
+        # their text unchanged; an unanticipated one is named so a real bug is not hidden as a vague failure.
+        known = isinstance(exc, (RunError, OSError, ValueError, KeyError, subprocess.SubprocessError))
+        record.update(status="failed", error=str(exc) if known else f"{type(exc).__name__}: {exc}",
                       failure_class=resolve_failure(exc, phase, run_dir), failure_phase=phase)
     record["elapsed_seconds"] = round(time.time() - record["started_at"], 2)
     try:

@@ -330,6 +330,8 @@ class RunnerTests(unittest.TestCase):
                 "Can't reach the API server \u2014", "No internet route \u2014", "Connection dropped",
                 "Socket is closed", "Connection lost mid-response", "503 Service Unavailable",
                 "Streaming response ended before any complete data was received",
+                "Login service temporarily unavailable (503)", "Authentication service unavailable",
+                "OAuth server returned 502 Bad Gateway",
             ],
             "setup": [
                 "SSL certificate verification failed", "unable to get local issuer certificate",
@@ -380,6 +382,40 @@ class RunnerTests(unittest.TestCase):
         with patch.object(runner, "parse_result", side_effect=OSError("disk")):
             code, record, _, _ = self.invoke()
         self.assertEqual((record["failure_class"], record["failure_phase"]), ("setup", "parse"))
+
+    def test_any_ordinary_exception_finalises_the_record(self):
+        # Hard-coding handler types has been wrong three times running (TypeError, AttributeError,
+        # RecursionError). The record already says "running", so no Exception may strand it.
+        for exc in (RecursionError("deep"), RuntimeError("odd"), ZeroDivisionError("x"), IndexError("y")):
+            with self.subTest(exc=type(exc).__name__):
+                with patch.object(runner, "parse_result", side_effect=exc):
+                    code, record, path, _ = self.invoke()
+                self.assertEqual(code, 1)
+                self.assertEqual(json.loads(path.read_text())["status"], "failed")
+                self.assertEqual((record["failure_class"], record["failure_phase"]), ("protocol", "parse"))
+                self.assertIn(type(exc).__name__, record["error"])  # unanticipated types are named
+
+    def test_known_exception_types_keep_their_error_text_unchanged(self):
+        with patch.object(runner, "parse_result", side_effect=runner.RunError("exact text")):
+            code, record, _, _ = self.invoke()
+        self.assertEqual(record["error"], "exact text")
+
+    def test_keyboard_interrupt_is_not_swallowed_as_a_failure(self):
+        with patch.object(runner, "parse_result", side_effect=KeyboardInterrupt()):
+            with self.assertRaises(KeyboardInterrupt):
+                self.invoke()
+
+    def test_malformed_approval_shapes_are_preconditions_not_tracebacks(self):
+        for body in ("[]", "null", '"x"', '{"status":"completed","mode":"review","response":[]}',
+                     '{"status":"completed","mode":"review","response":"APPROVED"}'):
+            with self.subTest(body=body):
+                approval = self.root / "bad-approval.json"
+                approval.write_text(body)
+                code, record, path, error = self.invoke(mode="check", extra=("--approval", str(approval)))
+                self.assertEqual(code, 1)
+                self.assertIsNone(path)
+                self.assertIn("[precondition]", error)
+                self.assertIn("APPROVED plan review is required", error)
 
     def test_code_changed_during_inspection_is_integrity(self):
         (self.repo / "new.py").write_text("original new file")
