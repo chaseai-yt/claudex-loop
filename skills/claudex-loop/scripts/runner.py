@@ -262,12 +262,18 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
             raise RunError("Codex event stream contains a non-object event.")
         if any(e.get("type") in ("error", "turn.failed") for e in events):
             raise RunError("Codex reported a failed turn; inspect the captured diagnostics.")
-        started = [e["thread_id"] for e in events if e.get("type") == "thread.started"]
+        started = [e.get("thread_id") for e in events if e.get("type") == "thread.started"]
         completed = [e for e in events if e.get("type") == "turn.completed"]
         if len(started) != 1 or len(completed) != 1:
             raise RunError("Missing or ambiguous Codex session/completion event.")
+        if not isinstance(started[0], str):
+            raise RunError("Codex thread.started event has no thread_id.")
         session = started[0]
-        text = (run_dir / "reply.txt").read_text(encoding="utf-8")
+        try:
+            text = (run_dir / "reply.txt").read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            # Fail closed: replacement characters must not turn a corrupt review into a valid one.
+            raise RunError("Codex reply is not valid UTF-8; inspect reply.txt.") from exc
         value = json.loads(text) if mode != "build" else text
         metadata = {"usage": completed[0].get("usage"), "observed_models": [],
                     **codex_effective_settings(session)}

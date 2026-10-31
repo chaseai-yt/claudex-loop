@@ -13,7 +13,7 @@ python RUNNER review --host claude --repo PROJECT --plan docs/implementation.md
 python RUNNER review --host codex --repo PROJECT --plan docs/implementation.md
 ```
 
-For an explicit model choice, add e.g. `--model gpt-6-astra --effort high` to a Codex call, or `--model claude-fable-5-1` to a Claude call. Omit these to use CLI configuration. Repeat explicit model/effort choices when resuming; the runner refuses mismatches. No global configuration is changed.
+For an explicit model choice, add e.g. `--model gpt-6-astra --effort high` to a Codex call, or `--model claude-fable-5-1` to a Claude call. Omit these to use CLI configuration. These model names are examples: which models run depends on the account (see Compatibility). Repeat explicit model/effort choices when resuming; the runner refuses mismatches. No global configuration is changed.
 
 For `build`, `--provider` must match the resolved builder. Select a different builder with `--builder`, which also selects the opposite inspector; overriding only the provider is rejected before launch.
 
@@ -53,5 +53,7 @@ Records contain the plan SHA256, CLI version, requested model/effort, returned s
 ## Compatibility
 
 Live-tested development baseline: Codex CLI **0.153.4** with **GPT-6 Astra**, and Claude Code **2.1.261** with **Fable 5.1**, on Windows. The older npm Codex CLI 0.144.5 exposed the required flags but Astra rejected it with “requires a newer version of Codex.” A version/help probe alone does not establish model compatibility. Verify the selected binary and account; see the repository's validation record for actual live coverage. The automated suite uses fake CLI processes and does not consume model quota. Optional live smoke tests should use disposable fixtures and an explicit model, never a production build.
+
+Model availability is per account, not per CLI version. A model the CLI accepts can still be refused by the account, and that includes a model pinned in the user's own Codex `config.toml`. On a ChatGPT-authenticated Codex account the turn then fails with HTTP 400 `model_not_found` (“not supported when using Codex with a ChatGPT account”), which the runner records as `status: "failed"` with `stdout.txt` retained. That is a configuration failure, not an approval, a `BLOCKED` verdict or a quota failure, and it does not consume a review round. Pass an explicit `--model` that the account can serve. The runner never substitutes one, and a bare `codex exec` with no runner fails the same way, which distinguishes this from a runner fault. The baseline above is a dated record from one account; do not assume it holds on another.
 
 Primary references: [Claude programmatic usage](https://code.claude.com/docs/en/headless), [Claude CLI](https://code.claude.com/docs/en/cli-reference), [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode).

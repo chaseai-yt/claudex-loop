@@ -60,8 +60,12 @@ if case == 'arrow':
     review['summary'] = 'Sound ' + chr(0x2192) + ' ok'
 if 'exec' in sys.argv:
     output = pathlib.Path(sys.argv[sys.argv.index('-o')+1])
-    output.write_text('Built; proof passed.' if case == 'build' else json.dumps(review))
-    print(json.dumps({'type':'thread.started', 'thread_id':session}))
+    if case == 'bad_utf8':
+        output.write_bytes(bytes([255, 254]) + b' not json')
+    else:
+        output.write_text('Built; proof passed.' if case == 'build' else json.dumps(review))
+    started = {'type':'thread.started'} if case == 'no_thread_id' else {'type':'thread.started', 'thread_id':session}
+    print(json.dumps(started))
     if case == 'turn_failed':
         print(json.dumps({'type':'turn.failed', 'error':{'message':'quota'}}))
     elif case != 'incomplete':
@@ -169,6 +173,20 @@ class RunnerTests(unittest.TestCase):
         code, record, _, _ = self.invoke(case="incomplete")
         self.assertEqual(code, 1)
         self.assertEqual(record["status"], "failed")
+
+    def test_codex_event_without_thread_id_is_rejected_by_the_parser(self):
+        code, record, _, _ = self.invoke(case="no_thread_id")
+        self.assertEqual(code, 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertNotIn("response", record)
+        self.assertIn("has no thread_id", record["error"])
+
+    def test_codex_reply_that_is_not_utf8_fails_closed_with_a_clear_error(self):
+        code, record, _, _ = self.invoke(case="bad_utf8")
+        self.assertEqual(code, 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertNotIn("response", record)
+        self.assertIn("not valid UTF-8", record["error"])
 
     def test_claude_array_envelope(self):
         code, record, _, _ = self.invoke("codex", case="array")
