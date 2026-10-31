@@ -35,6 +35,20 @@ if case == 'timeout':
 if case == 'exit':
     print('Authentication failed', file=sys.stderr)
     sys.exit(7)
+if case == 'quota_exit':
+    print('Error: rate limit exceeded (429)', file=sys.stderr)
+    sys.exit(1)
+if case == 'outage_exit':
+    print('503 Service Unavailable', file=sys.stderr)
+    sys.exit(1)
+if case == 'model_unavailable':
+    print(json.dumps({'type':'thread.started', 'thread_id':'12345678-1234-4567-8123-123456789abc'}))
+    print(json.dumps({'type':'error', 'message':'The gpt-x model is not supported when using Codex with a ChatGPT account.'}))
+    sys.exit(1)
+if case == 'chatty_exit':
+    print(json.dumps({'type':'item.completed', 'item':{'type':'agent_message',
+          'text':'The plan covers quota, rate limit and authentication handling.'}}))
+    sys.exit(1)
 if case == 'empty':
     sys.exit(0)
 if case == 'mutate_plan':
@@ -62,6 +76,8 @@ if 'exec' in sys.argv:
     output = pathlib.Path(sys.argv[sys.argv.index('-o')+1])
     if case == 'bad_utf8':
         output.write_bytes(bytes([255, 254]) + b' not json')
+    elif case == 'no_reply':
+        pass
     else:
         output.write_text('Built; proof passed.' if case == 'build' else json.dumps(review))
     started = {'type':'thread.started'} if case == 'no_thread_id' else {'type':'thread.started', 'thread_id':session}
@@ -76,8 +92,15 @@ else:
              'modelUsage':{'claude-test':{'inputTokens':10}},'usage':{'input_tokens':10}}
     if case == 'turn_failed':
         value.update(subtype='error_during_execution',is_error=True)
+    if case == 'model_usage_null':
+        value['modelUsage'] = None
+    if case == 'model_usage_int':
+        value['modelUsage'] = 5
     print(json.dumps([{'type':'system','subtype':'init'}, value] if case == 'array' else value))
 '''
+
+
+RunError_ = runner.RunError
 
 
 class RunnerTests(unittest.TestCase):
@@ -187,6 +210,159 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(record["status"], "failed")
         self.assertNotIn("response", record)
         self.assertIn("not valid UTF-8", record["error"])
+
+    def test_failure_class_and_phase_by_cause(self):
+        # (fake case, expected class, expected phase)
+        table = [
+            ("exit", "auth", "execute"),               # "Authentication failed"
+            ("quota_exit", "quota", "execute"),
+            ("outage_exit", "outage", "execute"),
+            ("model_unavailable", "auth", "execute"),  # model_not_found is entitlement, not outage
+            ("turn_failed", "quota", "parse"),         # provider-reported failure keeps its own cause
+            ("empty", "protocol", "parse"),
+            ("malformed", "protocol", "parse"),
+            ("incomplete", "protocol", "parse"),
+            ("no_thread_id", "protocol", "parse"),
+            ("bad_utf8", "protocol", "parse"),
+            ("no_reply", "setup", "parse"),            # local file fault, never protocol
+            ("mutate_plan", "integrity", "verify"),
+        ]
+        for case, expected_class, expected_phase in table:
+            with self.subTest(case=case):
+                code, record, _, error = self.invoke(case=case)
+                self.assertEqual(code, 1)
+                self.assertEqual(record["status"], "failed")
+                self.assertEqual((record["failure_class"], record["failure_phase"]),
+                                 (expected_class, expected_phase))
+                self.assertIn(f"[{expected_class}]", error)
+
+    def test_null_model_usage_is_tolerated_metadata(self):
+        code, record, _, _ = self.invoke("codex", case="model_usage_null")  # codex host -> Claude reviewer
+        self.assertEqual(code, 0)
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(record["observed_models"], [])
+
+    def test_unexpected_exception_type_never_leaves_a_running_record(self):
+        code, record, path, _ = self.invoke("codex", case="model_usage_int")
+        self.assertEqual(code, 1)
+        self.assertNotEqual(record["status"], "running")
+        self.assertEqual((record["status"], record["failure_class"], record["failure_phase"]),
+                         ("failed", "protocol", "parse"))
+        self.assertEqual(json.loads(path.read_text())["status"], "failed")
+
+    def test_resume_file_that_is_not_a_result_object_is_a_precondition(self):
+        for body in ("[]", "null", '"x"', "7"):
+            with self.subTest(body=body):
+                bad = self.root / "bad-resume.json"
+                bad.write_text(body)
+                code, record, path, error = self.invoke(extra=("--resume", str(bad)))
+                self.assertEqual(code, 1)
+                self.assertIsNone(path)
+                self.assertIn("[precondition]", error)
+                self.assertNotIn("Traceback", error)
+
+    def test_failure_to_persist_the_final_record_is_setup_not_precondition(self):
+        real = runner.save
+
+        def flaky(path, value):
+            if Path(path).name == "result.json" and value.get("status") != "running":
+                raise OSError("disk full")
+            return real(path, value)
+
+        with patch.object(runner, "save", flaky):
+            code, record, path, error = self.invoke()
+        self.assertEqual(code, 1)                      # a run we could not record is never a success
+        self.assertEqual(record["status"], "running")  # documented: treat a running record as failed
+        self.assertIn("[setup]", error)
+        self.assertNotIn("[precondition]", error)
+        self.assertIn("Could not persist", error)
+
+    def test_save_replaces_atomically_and_leaves_no_temp_file(self):
+        target = self.root / "result.json"
+        runner.save(target, {"a": 1})
+        runner.save(target, {"a": 2})
+        self.assertEqual(json.loads(target.read_text()), {"a": 2})
+        self.assertEqual([p.name for p in self.root.glob("result.json*")], ["result.json"])
+        # A write that fails part-way must leave the previous record intact and no debris.
+        with patch.object(runner.os, "replace", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                runner.save(target, {"a": 3})
+        self.assertEqual(json.loads(target.read_text()), {"a": 2})
+        self.assertEqual([p.name for p in self.root.glob("result.json*")], ["result.json"])
+
+    def test_malformed_command_line_is_rejected_by_argparse_unclassified(self):
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as caught:
+            runner.main(["review", "--host", "claude", "--timeout", "nope"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("invalid int value", error.getvalue())
+        self.assertNotIn("[precondition]", error.getvalue())
+
+    def test_words_in_agent_output_are_not_read_as_the_cause(self):
+        # A plan about quota/auth puts those words in Codex's own messages; only error
+        # events and stderr are evidence of why the CLI failed.
+        code, record, _, _ = self.invoke(case="chatty_exit")
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("other", "execute"))
+
+    def test_class_does_not_depend_on_an_exit_code(self):
+        code, record, _, _ = self.invoke(case="timeout", extra=("--timeout", "1"))
+        self.assertEqual(code, 1)
+        self.assertNotIn("exit_code", record)
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("timeout", "execute"))
+        # The opposite direction: exit 0 with a malformed review is still a protocol fault.
+        code, record, _, _ = self.invoke(case="malformed")
+        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["failure_class"], "protocol")
+
+    def test_preparation_oserror_is_setup_not_other(self):
+        code, record, _, _ = self.invoke(extra=("--feedback", str(self.root / "missing.txt")))
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("setup", "prepare"))
+
+    def test_launch_oserror_in_execute_phase_is_setup(self):
+        with patch.object(runner, "execute", side_effect=OSError("spawn failed")):
+            code, record, _, _ = self.invoke()
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("setup", "execute"))
+
+    def test_no_parse_phase_failure_is_ever_other(self):
+        for exc in (KeyError("x"), RunError_("y"), ValueError("z"), subprocess.SubprocessError("w")):
+            with self.subTest(exc=type(exc).__name__):
+                with patch.object(runner, "parse_result", side_effect=exc):
+                    code, record, _, _ = self.invoke()
+                self.assertEqual((record["failure_class"], record["failure_phase"]), ("protocol", "parse"))
+        with patch.object(runner, "parse_result", side_effect=OSError("disk")):
+            code, record, _, _ = self.invoke()
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("setup", "parse"))
+
+    def test_code_changed_during_inspection_is_integrity(self):
+        (self.repo / "new.py").write_text("original new file")
+        code, record, _, _ = self.invoke(mode="inspect", case="mutate_code", extra=("--base", self.base))
+        self.assertEqual((record["failure_class"], record["failure_phase"]), ("integrity", "verify"))
+
+    def test_pre_record_failure_writes_no_result_and_is_a_precondition(self):
+        code, record, path, error = self.invoke(mode="inspect")  # no --base
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+        self.assertIsNone(path)
+        self.assertIn("[precondition]", error)
+        self.assertIn("Inspection requires --base", error)
+
+    def test_completed_run_carries_no_failure_fields(self):
+        code, record, _, error = self.invoke()
+        self.assertEqual(code, 0)
+        self.assertNotIn("failure_class", record)
+        self.assertNotIn("failure_phase", record)
+        self.assertNotIn("[", error)
+
+    def test_failure_class_never_approves_or_substitutes_a_provider(self):
+        code, record, path, _ = self.invoke(case="quota_exit")
+        self.assertEqual(record["provider"], "codex")
+        self.assertNotIn("response", record)
+        with self.assertRaises(runner.RunError):
+            runner.check_approval(record, self.plan, self.repo)
+
+    def test_every_failure_class_has_a_remediation_hint(self):
+        self.assertEqual(set(runner.REMEDIATION), set(runner.FAILURE_CLASSES))
+        self.assertEqual(len(runner.FAILURE_CLASSES), 9)
 
     def test_claude_array_envelope(self):
         code, record, _, _ = self.invoke("codex", case="array")

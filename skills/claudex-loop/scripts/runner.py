@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -35,8 +36,89 @@ REVIEW_SCHEMA = {
 }
 
 
+# What the caller should do about a failure. failure_phase records where it happened.
+FAILURE_CLASSES = ("quota", "auth", "outage", "timeout", "protocol",
+                   "setup", "integrity", "precondition", "other")
+REMEDIATION = {
+    "quota": "Provider quota or rate limit reached. Wait for it to reset; no other provider was substituted.",
+    "auth": "Provider login or model entitlement problem. Re-authenticate, or pass a --model this account can serve.",
+    "outage": "Provider or network outage. Try again later; nothing was substituted.",
+    "timeout": "The run exceeded --timeout and was killed. Raise --timeout only if the work justifies it.",
+    "protocol": "The provider's output failed validation. Inspect the retained diagnostics; this is not an approval.",
+    "setup": "A local step failed around the CLI call. Check paths, permissions and the CLI installation.",
+    "integrity": "The plan or code changed during the run. Review or inspect the final state again.",
+    "precondition": "A requirement was not met before any run started. Fix the argument or checkout state named above.",
+    "other": "Unclassified failure. Inspect stdout.txt and stderr.txt in the artifact directory.",
+}
+# Provider wording only; checked in order, so an entitlement error is never read as an outage.
+_CAUSES = (
+    ("auth", re.compile(r"model_not_found|not supported when using codex|not logged in|authentication|"
+                        r"unauthori[sz]ed|invalid api key|expired token|please run /login|\blogin\b|"
+                        r"\b(?:status|http)\W{0,4}(?:401|403)\b")),
+    ("quota", re.compile(r"rate.?limit|quota|usage limit|too many requests|hit your limit|"
+                         r"\b(?:status|http)\W{0,4}429\b")),
+    ("outage", re.compile(r"overloaded|temporarily unavailable|service unavailable|bad gateway|"
+                          r"gateway time-?out|connection (?:reset|refused|aborted)|econn(?:reset|refused)|"
+                          r"enotfound|getaddrinfo|network (?:is )?unreachable|could not resolve|"
+                          r"\b(?:status|http)\W{0,4}5\d\d\b|\b5\d\d (?:internal|bad|service|gateway)")),
+)
+
+
 class RunError(Exception):
-    pass
+    def __init__(self, message: str = "", failure_class: str | None = None):
+        super().__init__(message)
+        self.failure_class = failure_class
+
+
+def classify_text(text: str) -> str | None:
+    """Name a provider-reported cause from its own wording, or None when it names none."""
+    lowered = text.lower()
+    return next((name for name, pattern in _CAUSES if pattern.search(lowered)), None)
+
+
+def _reported_errors(stdout: str) -> str:
+    """Only what the provider flagged as an error: stdout also carries agent messages that may
+    quote the plan, and a plan about quota or authentication must not classify its own failure."""
+    kept = []
+    for line in stdout.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            if line.strip():
+                kept.append(line)  # not an event stream: plain CLI error text
+            continue
+        for event in value if isinstance(value, list) else [value]:
+            if isinstance(event, dict) and (event.get("type") in ("error", "turn.failed")
+                                            or event.get("is_error") is True):
+                kept.append(json.dumps(event))
+    return "\n".join(kept)
+
+
+def classify_exit(run_dir: Path) -> str:
+    """Execute phase only: captured CLI output is the sole evidence of why it exited nonzero."""
+    text = ""
+    try:
+        text += (run_dir / "stderr.txt").read_text(encoding="utf-8", errors="replace")[:65536]
+        text += "\n" + _reported_errors(
+            (run_dir / "stdout.txt").read_text(encoding="utf-8", errors="replace")[:65536])
+    except OSError:
+        pass
+    return classify_text(text) or "other"
+
+
+def resolve_failure(exc: BaseException, phase: str, run_dir: Path) -> str:
+    """An explicit tag wins; otherwise the phase supplies the class (refined by type in parse/execute)."""
+    tagged = getattr(exc, "failure_class", None)
+    if tagged:
+        return tagged
+    if phase == "prepare":
+        return "setup"
+    if phase == "parse":
+        # Deny-list: file I/O is the only local fault reachable while parsing provider output.
+        return "setup" if isinstance(exc, OSError) else "protocol"
+    if phase == "verify":
+        return "integrity"
+    return "setup" if isinstance(exc, OSError) else classify_exit(run_dir)
 
 
 def digest(data: bytes) -> str:
@@ -44,7 +126,13 @@ def digest(data: bytes) -> str:
 
 
 def save(path: Path, value) -> None:
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        temp.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temp, path)  # a failed write never truncates the previous record
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def resolve_roles(host: str, reviewer: str | None = None,
@@ -224,7 +312,8 @@ def execute(argv: list[str], prompt: str, repo: Path, run_dir: Path, timeout: in
                 else:
                     os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
-                raise RunError("Run timed out or was interrupted; no approval recorded.") from exc
+                raise RunError("Run timed out or was interrupted; no approval recorded.",
+                               failure_class="timeout") from exc
             return proc.returncode
 
 
@@ -260,8 +349,10 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
         events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
         if any(not isinstance(e, dict) for e in events):
             raise RunError("Codex event stream contains a non-object event.")
-        if any(e.get("type") in ("error", "turn.failed") for e in events):
-            raise RunError("Codex reported a failed turn; inspect the captured diagnostics.")
+        failed = [e for e in events if e.get("type") in ("error", "turn.failed")]
+        if failed:
+            raise RunError("Codex reported a failed turn; inspect the captured diagnostics.",
+                           failure_class=classify_text(json.dumps(failed)))
         started = [e.get("thread_id") for e in events if e.get("type") == "thread.started"]
         completed = [e for e in events if e.get("type") == "turn.completed"]
         if len(started) != 1 or len(completed) != 1:
@@ -288,11 +379,12 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
         if not isinstance(envelope, dict):
             raise RunError("Claude response is not a result object.")
         if envelope.get("type") != "result" or envelope.get("is_error") or envelope.get("subtype") != "success":
-            raise RunError("Claude did not finish successfully; inspect the captured diagnostics.")
+            raise RunError("Claude did not finish successfully; inspect the captured diagnostics.",
+                           failure_class=classify_text(str(envelope.get("result", ""))))
         session = envelope.get("session_id")
         value = envelope.get("structured_output") if mode != "build" else envelope.get("result")
         metadata = {"usage": envelope.get("usage"),
-                    "observed_models": list(envelope.get("modelUsage", {})),
+                    "observed_models": list(envelope.get("modelUsage") or {}),  # null is absent metadata
                     "permission_denials": envelope.get("permission_denials", []),
                     "total_cost_usd": envelope.get("total_cost_usd")}
     try:
@@ -321,6 +413,8 @@ def check_approval(record: dict, plan: Path, repo: Path, plan_body: bytes | None
 def previous_record(path: Path, repo: Path, plan: Path, provider: str, mode: str,
                     model, effort) -> dict:
     record = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(record, dict):
+        raise RunError("Resume file is not a result.json object. Start fresh instead.")
     for key, expected in {"repo": str(repo), "plan": str(plan), "provider": provider,
                           "mode": mode, "requested_model": model,
                           "requested_effort": effort, "status": "completed"}.items():
@@ -387,6 +481,7 @@ def run(args) -> int:
               "base": args.base, "snapshot": before, "previous": args.resume,
               "started_at": time.time(), "artifacts": str(run_dir)}
     save(run_dir / "result.json", record)
+    phase = "prepare"
     try:
         save(run_dir / "schema.json", REVIEW_SCHEMA)
         instructions = (
@@ -434,12 +529,15 @@ def run(args) -> int:
         save(run_dir / "command.json", argv)
         print(json.dumps({"provider": provider, "model": args.model or "CLI default (unresolved)",
                           "mode": args.mode, "artifacts": str(run_dir)}), flush=True)
+        phase = "execute"
         code = execute(argv, prompt, repo, run_dir, args.timeout)
         record["exit_code"] = code
         if code:
             raise RunError(f"{provider} exited {code}; inspect stdout.txt and stderr.txt.")
+        phase = "parse"
         record.update(parse_result(provider, args.mode, run_dir,
                                    previous["session_id"] if previous else None))
+        phase = "verify"
         if digest(plan.read_bytes()) != record["plan_sha256"]:
             raise RunError("Plan changed during the run; result cannot approve the current plan.")
         if before and snapshot(repo, args.base)["sha256"] != before["sha256"]:
@@ -449,12 +547,23 @@ def run(args) -> int:
                 raise RunError("Builder changed HEAD despite the no-commit contract. Inspect before proceeding.")
             record["snapshot"] = snapshot(repo, args.base)
         record["status"] = "completed"
-    except (RunError, OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-        record.update(status="failed", error=str(exc))
+    except (RunError, OSError, ValueError, KeyError, TypeError, AttributeError,
+            subprocess.SubprocessError) as exc:
+        record.update(status="failed", error=str(exc),
+                      failure_class=resolve_failure(exc, phase, run_dir), failure_phase=phase)
     record["elapsed_seconds"] = round(time.time() - record["started_at"], 2)
-    save(run_dir / "result.json", record)
+    try:
+        save(run_dir / "result.json", record)
+    except OSError as exc:
+        # The record already exists, so this is not pre-record. It may still read "running".
+        raise RunError(f"Could not persist {run_dir / 'result.json'}: {exc}. "
+                       "It may still read 'running'; treat this run as failed.",
+                       failure_class="setup") from exc
     # ASCII escapes: a cp1252/cp949 stdout must not turn a completed round into exit 1 (#31).
     print(json.dumps(record, indent=2))
+    if record["status"] != "completed":
+        print(f"claudex-loop: [{record['failure_class']}] {REMEDIATION[record['failure_class']]}",
+              file=sys.stderr)
     return 0 if record["status"] == "completed" else 1
 
 
@@ -490,6 +599,9 @@ def main(argv=None) -> int:
         return run(args)
     except (RunError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"claudex-loop: {exc}", file=sys.stderr)
+        # No result.json exists on this surface, so the class is reported on stderr only.
+        cls = getattr(exc, "failure_class", None) or "precondition"
+        print(f"claudex-loop: [{cls}] {REMEDIATION[cls]}", file=sys.stderr)
         return 1
 
 
