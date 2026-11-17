@@ -113,6 +113,47 @@ claudex this feature, builder=claude, reviewer_model=claude-fable-5-1
 
 The third example starts in Claude Code; the fourth starts in Codex. The host selects the opposite reviewer automatically. `codex-review` remains an explicit Codex review command; `codex-build` remains an explicit Codex builder command. For automatic host-based routing, use `claudex-loop`.
 
+### Recon exercise: a public reference and a local check
+
+Try planning a troubleshooting note for delegated-review timeouts in this repository. Phase 0 should establish both what Python documents and what this runner actually does before the plan goes to review.
+
+For optional web search in the **host conversation**, follow [Parallel MCP setup](https://docs.parallel.ai/integrations/mcp/quickstart). Its `web_search` and `web_fetch` tools can be used without a Parallel key, subject to anonymous rate limits. For example, from this checkout, add a local-scope server to Claude Code:
+
+```sh
+claude mcp add --transport http --scope local parallel-recon https://mcp.parallel.ai/mcp --header "User-Agent: claudex-loop-recon"
+```
+
+Open a new Claude Code session in this checkout, confirm `parallel-recon` is connected in `/mcp`, and invoke the installed skill with this prompt (use `/claudex-loop` after manual installation):
+
+```text
+/claudex-loop:claudex-loop research=web plan=../claudex-timeout-plan.md log=../claudex-timeout-review.md
+
+Plan a short troubleshooting note for delegated-review timeouts here.
+Do not implement it. Before independent plan review:
+
+1. Use parallel-recon's web_search to find the official Python documentation
+   for Popen.communicate(timeout=...). Read the relevant excerpt, using
+   web_fetch if needed. Explain whether a timeout alone kills the child,
+   with the actual public source URL next to the claim.
+2. Separately inspect execute() and run() in
+   skills/claudex-loop/scripts/runner.py and test_timeout_records_failure
+   in tests/test_runner.py. Run:
+   python -m unittest discover -s tests -p test_runner.py -k timeout -v
+3. Put the public reference and the local paths, command, observed result
+   and limitations in separate rows of the assumptions ledger. Include
+   both rows in the plan before sending it to the independent reviewer.
+   Distinguish documented Python behavior from this runner's cleanup and
+   failure-recording behavior; say exactly what the local test checks.
+
+If web search is unavailable or rate limited, or the local check fails,
+record the missing evidence and pause before review. Do not invent a
+citation or count an unrun check as passing. Stop after plan review.
+```
+
+The exercise is ready for review when the plan contains a sourced explanation and a separately observed local check. A passing timeout test establishes failure recording in its fixture; it does not establish process-tree cleanup on every platform. The reviewer receives the evidence in the plan: delegated reviewers still have MCP disabled and do not run proof commands. Preserve any unresolved evidence gaps in the review log.
+
+This exercise is optional. Existing research tools and `research=none` remain available for other tasks. To remove the example server, run `claude mcp remove parallel-recon --scope local` from the same checkout. Parallel affiliation: this example was contributed by George Pickett, who works at Parallel.
+
 ## Controls
 
 | Argument | Default | Purpose |
