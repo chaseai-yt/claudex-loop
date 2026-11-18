@@ -17,6 +17,11 @@ import uuid
 
 
 PROVIDERS = ("claude", "codex")
+# Grok is an opt-in third reviewer/inspector: never a host or builder.
+REVIEWERS = PROVIDERS + ("grok",)
+# Reviewer isolation: no Claude/Cursor-compatible MCP servers, hooks, rules or skills.
+GROK_REVIEW_ENV = {f"GROK_{vendor}_{cell}_ENABLED": "false" for vendor in ("CLAUDE", "CURSOR")
+                   for cell in ("AGENTS", "HOOKS", "MCPS", "RULES", "SKILLS")}
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -66,11 +71,11 @@ def cli_prefix(provider: str, override: str | None = None) -> list[str]:
         raise RunError(f"{provider} is not on PATH. Install and authenticate its CLI first.")
     path = Path(executable)
     if os.name == "nt" and path.suffix.lower() in (".cmd", ".bat", ".ps1"):
-        entry = path.parent / "node_modules" / (
-            "@openai/codex/bin/codex.js" if provider == "codex"
-            else "@anthropic-ai/claude-code/cli.js")
+        entry = {"codex": "@openai/codex/bin/codex.js",
+                 "claude": "@anthropic-ai/claude-code/cli.js"}.get(provider)
+        entry = path.parent / "node_modules" / entry if entry else None
         node = shutil.which("node")
-        if node and entry.is_file():
+        if node and entry and entry.is_file():
             return [node, str(entry)]
         raise RunError(f"Cannot safely launch {path}. Put the native CLI executable on PATH.")
     return [str(path)]
@@ -182,6 +187,20 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
         if effort:
             args += ["-c", f'model_reasoning_effort="{effort}"']
         return args + ["-"]
+    if provider == "grok":
+        if not review:
+            raise RunError("Grok reviews and inspects only; choose claude or codex to build.")
+        args = ["--prompt-file", str(run_dir / "prompt.txt"), "--output-format", "json",
+                "--json-schema", json.dumps(REVIEW_SCHEMA, separators=(",", ":")),
+                "--tools", "read_file,grep,list_dir", "--disallowed-tools", "search_tool,use_tool",
+                "--disable-web-search", "--no-subagents", "--sandbox", "read-only", "--no-auto-update"]
+        if session:
+            args += ["--resume", session]
+        if model:
+            args += ["-m", model]
+        if effort:
+            args += ["--effort", effort]
+        return args
     args = ["-p", "--output-format", "json", "--permission-prompts", "none"]
     if review:
         args += ["--safe-mode", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
@@ -201,13 +220,14 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
     return args
 
 
-def execute(argv: list[str], prompt: str, repo: Path, run_dir: Path, timeout: int) -> int:
+def execute(argv: list[str], prompt: str, repo: Path, run_dir: Path, timeout: int,
+            env: dict | None = None) -> int:
     """Keep diagnostics and terminate the process tree on timeout/interruption."""
     with (run_dir / "stdout.txt").open("wb") as out, (run_dir / "stderr.txt").open("wb") as err:
         options = {"start_new_session": True} if os.name != "nt" else {
             "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
         with subprocess.Popen(argv, cwd=repo, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                              **options) as proc:
+                              env=env, **options) as proc:
             try:
                 proc.communicate(prompt.encode("utf-8"), timeout=timeout)
             except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
@@ -237,6 +257,17 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
         text = (run_dir / "reply.txt").read_text(encoding="utf-8")
         value = json.loads(text) if mode != "build" else text
         metadata = {"usage": completed[0].get("usage"), "observed_models": []}
+    elif provider == "grok":
+        envelope = json.loads(stdout)
+        if not isinstance(envelope, dict) or envelope.get("stopReason") != "end_turn" or envelope.get("errors"):
+            raise RunError("Grok did not finish successfully; inspect the captured diagnostics.")
+        session = envelope.get("sessionId")
+        value = envelope.get("structuredOutput")
+        if value is None:
+            value = json.loads(envelope.get("text") or "null")
+        metadata = {"usage": envelope.get("usage"),
+                    "observed_models": list(envelope.get("modelUsage", {})),
+                    "total_cost_usd": envelope.get("total_cost_usd")}
     else:
         envelope = json.loads(stdout)
         # Some CLI versions emit an array of init/assistant/result events for JSON.
@@ -300,6 +331,10 @@ def run(args) -> int:
     roles = resolve_roles(args.host, builder=args.builder)
     provider = args.provider or (roles["builder"] if args.mode == "build" else
                                  roles["inspector"] if args.mode == "inspect" else roles["reviewer"])
+    if provider == "grok" and args.mode == "build":
+        raise RunError("Grok reviews and inspects only; choose claude or codex to build.")
+    if args.mode in ("review", "inspect"):
+        roles["reviewer" if args.mode == "review" else "inspector"] = provider
     if args.mode == "review" and provider == args.host:
         raise RunError("Plan review must use the provider opposite the planner/host.")
     if args.mode == "inspect" and provider == roles["builder"]:
@@ -389,7 +424,8 @@ def run(args) -> int:
         save(run_dir / "command.json", argv)
         print(json.dumps({"provider": provider, "model": args.model or "CLI default (unresolved)",
                           "mode": args.mode, "artifacts": str(run_dir)}), flush=True)
-        code = execute(argv, prompt, repo, run_dir, args.timeout)
+        env = {**os.environ, **GROK_REVIEW_ENV} if provider == "grok" else None
+        code = execute(argv, prompt, repo, run_dir, args.timeout, env)
         record["exit_code"] = code
         if code:
             raise RunError(f"{provider} exited {code}; inspect stdout.txt and stderr.txt.")
@@ -418,7 +454,8 @@ def main(argv=None) -> int:
     parser.add_argument("--host", required=True, choices=PROVIDERS,
                         help="Actual host of the user conversation; do not infer from installed binaries.")
     parser.add_argument("--builder", choices=PROVIDERS)
-    parser.add_argument("--provider", choices=PROVIDERS)
+    parser.add_argument("--provider", choices=REVIEWERS,
+                        help="Override the reviewer or inspector; grok is opt-in and never builds.")
     parser.add_argument("--repo", default=".")
     parser.add_argument("--plan", default="PLAN.md")
     parser.add_argument("--model", help="Explicit model override; omitted means provider CLI default.")

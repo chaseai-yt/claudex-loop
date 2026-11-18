@@ -53,7 +53,16 @@ if case == 'blocked':
     review.update(verdict='BLOCKED', coverage=[], limitations=['Required schema unavailable.'])
 if case == 'malformed':
     review = {'verdict':'APPROVED'}
-if 'exec' in sys.argv:
+if '--prompt-file' in sys.argv:
+    assert os.environ.get('GROK_CLAUDE_MCPS_ENABLED') == 'false', 'reviewer env not isolated'
+    value = {'text': json.dumps(review), 'stopReason': 'end_turn', 'sessionId': session,
+             'structuredOutput': review, 'modelUsage': {'grok-test': {'inputTokens': 10}}}
+    if case == 'turn_failed':
+        value.update(stopReason='max_tokens')
+    if case == 'malformed':
+        value.pop('structuredOutput')
+    print(json.dumps(value))
+elif 'exec' in sys.argv:
     output = pathlib.Path(sys.argv[sys.argv.index('-o')+1])
     output.write_text('Built; proof passed.' if case == 'build' else json.dumps(review))
     print(json.dumps({'type':'thread.started', 'thread_id':session}))
@@ -128,7 +137,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(record["response"]["verdict"], "APPROVED")
 
     def test_unpinned_and_explicit_model_selection(self):
-        for provider in runner.PROVIDERS:
+        for provider in runner.REVIEWERS:
             args = runner.command(provider, "review", self.root)
             self.assertNotIn("--model", args)
             self.assertNotIn("-m", args)
@@ -141,6 +150,36 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("--safe-mode", args)
         self.assertIn("--strict-mcp-config", args)
         self.assertEqual(args[args.index("--permission-mode")+1], "dontAsk")
+
+    def test_grok_review_is_read_only_isolated_and_never_builds(self):
+        args = runner.command("grok", "review", self.root, session=SESSION)
+        self.assertEqual(args[args.index("--tools")+1], "read_file,grep,list_dir")
+        self.assertEqual(args[args.index("--disallowed-tools")+1], "search_tool,use_tool")
+        self.assertEqual(args[args.index("--sandbox")+1], "read-only")
+        self.assertIn("--disable-web-search", args)
+        self.assertEqual(args[args.index("--resume")+1], SESSION)
+        with self.assertRaises(runner.RunError):
+            runner.command("grok", "build", self.root)
+        code, record, _, _ = self.invoke(mode="build", extra=("--provider", "grok", "--unreviewed-spec",
+                                                              "--proof", "true"))
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+
+    def test_grok_review_and_inspection_complete_with_isolated_env(self):
+        code, record, _, _ = self.invoke(extra=("--provider", "grok"))
+        self.assertEqual(code, 0, record)
+        self.assertEqual((record["provider"], record["roles"]["reviewer"]), ("grok", "grok"))
+        self.assertEqual(record["observed_models"], ["grok-test"])
+        code, record, _, _ = self.invoke(mode="inspect", extra=("--provider", "grok", "--base", self.base))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["roles"]["inspector"], "grok")
+
+    def test_grok_failures_never_approve(self):
+        for case in ("exit", "empty", "malformed", "turn_failed"):
+            with self.subTest(case=case):
+                code, record, _, _ = self.invoke(case=case, extra=("--provider", "grok"))
+                self.assertEqual(code, 1)
+                self.assertEqual(record["status"], "failed")
 
     def test_codex_resume_keeps_read_only_and_explicit_session(self):
         args = runner.command("codex", "review", self.root, session=SESSION)
