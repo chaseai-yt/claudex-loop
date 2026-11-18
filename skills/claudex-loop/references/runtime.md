@@ -51,3 +51,12 @@ Records contain the plan SHA256, CLI version, requested model/effort, returned s
 Live-tested development baseline: Codex CLI **0.153.4** with **GPT-6 Astra**, and Claude Code **2.1.261** with **Fable 5.1**, on Windows. The older npm Codex CLI 0.144.5 exposed the required flags but Astra rejected it with “requires a newer version of Codex.” A version/help probe alone does not establish model compatibility. Verify the selected binary and account; see the repository's validation record for actual live coverage. The automated suite uses fake CLI processes and does not consume model quota. Optional live smoke tests should use disposable fixtures and an explicit model, never a production build.
 
 Primary references: [Claude programmatic usage](https://code.claude.com/docs/en/headless), [Claude CLI](https://code.claude.com/docs/en/cli-reference), [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode).
+
+## Grok as reviewer or inspector
+
+```bash
+python RUNNER review --host claude --provider grok --repo PROJECT --plan docs/implementation.md --model grok-4.7 --effort high
+python RUNNER inspect --host claude --provider grok --repo PROJECT --plan docs/implementation.md --base PRE_BUILD_COMMIT --model grok-4.7 --effort high
+```
+
+Grok accepts `low`, `medium`, `high` and `xhigh`. The runner gives it `read_file`, `grep` and `list_dir` only, removes MCP tool access, web search and subagents, uses the `read-only` sandbox profile, and turns off Claude/Cursor compatibility scanning for the call. Native `~/.grok/config.toml` hooks still load. `build` with `--provider grok` is refused. Resume uses the recorded `sessionId`.
