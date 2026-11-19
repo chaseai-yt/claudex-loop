@@ -15,7 +15,7 @@ python RUNNER build --host claude --builder codex --repo PROJECT --plan PLAN_PAT
 python RUNNER build --host codex --builder claude --repo PROJECT --plan PLAN_PATH --approval APPROVED_RESULT --proof "npm test"
 ```
 
-Codex builds with `workspace-write` and noninteractive approvals, not a global sandbox bypass. Claude builds with its normal configured permissions and `acceptEdits`; commands still requiring approval are denied in headless mode. Confirm any required proof-command permissions using the provider's supported configuration before launch. Never respond to a denial by silently turning on permission bypass. If the external builder cannot perform required work, report it or have the already-authorized host perform that portion and log authorship.
+Codex builds with `workspace-write` and noninteractive approvals, not a global sandbox bypass. Because MCP tools act outside that sandbox, a Codex build also switches off every enabled MCP server, as reviews do, and fails closed if they cannot be listed; Claude builds load an empty MCP configuration. Claude builds with its normal configured permissions and `acceptEdits`; commands still requiring approval are denied in headless mode. Confirm any required proof-command permissions using the provider's supported configuration before launch. Never respond to a denial by silently turning on permission bypass. If the external builder cannot perform required work, report it or have the already-authorized host perform that portion and log authorship.
 
 For an explicitly requested standalone work order without plan review, replace `--approval` with `--unreviewed-spec`; record the missing review. This does not waive independent inspection of the final code.
 

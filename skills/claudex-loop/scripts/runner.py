@@ -147,7 +147,7 @@ def validate_review(value) -> dict:
 
 
 def codex_mcp_servers(prefix: list[str], repo: Path) -> list[str]:
-    """Name every enabled user/project MCP server so a review can switch each one off.
+    """Name every enabled user/project MCP server so a review or build can switch each one off.
 
     The read-only shell sandbox does not govern MCP side effects (#28). Plugin and app
     servers are removed by --disable; the rest are listed here. Fails closed.
@@ -159,7 +159,7 @@ def codex_mcp_servers(prefix: list[str], repo: Path) -> list[str]:
     except ValueError:
         servers = None
     if not isinstance(servers, list) or any(not isinstance(s, dict) for s in servers):
-        raise RunError("Could not list Codex MCP servers; refusing to review with unknown tools loaded.")
+        raise RunError("Could not list Codex MCP servers; refusing to run with unknown tools loaded.")
     names = [s.get("name") for s in servers if s.get("enabled")]
     if any(not isinstance(n, str) or not n or not all(c.isalnum() or c in "_-" for c in n) for n in names):
         raise RunError("Codex listed an MCP server name that cannot be disabled safely.")
@@ -177,9 +177,10 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
         args += ["-c", 'approval_policy="never"', "--json", "-o", str(run_dir / "reply.txt")]
         # Plugins/apps (computer use, browser) and the notify hook act outside the sandbox.
         args += ["--disable", "apps", "--disable", "plugins", "-c", "notify=[]"]
+        # MCP servers act outside the sandbox too, so neither reviews nor builds keep them.
+        for name in mcp_off:
+            args += ["-c", f"mcp_servers.{name}.enabled=false"]
         if review:
-            for name in mcp_off:
-                args += ["-c", f"mcp_servers.{name}.enabled=false"]
             args += ["--skip-git-repo-check", "--output-schema", str(run_dir / "schema.json")]
         if model:
             args += ["-m", model]
@@ -420,8 +421,7 @@ def run(args) -> int:
             raise RunError("CLI version probe failed. Check the resolved executable before retrying.")
         record["cli_version"] = version.stdout.decode("utf-8", errors="replace").strip()
         record["executable"] = prefix
-        mcp_off = (codex_mcp_servers(prefix, repo)
-                   if provider == "codex" and args.mode != "build" else [])
+        mcp_off = codex_mcp_servers(prefix, repo) if provider == "codex" else []
         record["disabled_mcp_servers"] = mcp_off
         argv = prefix + command(provider, args.mode, run_dir, args.model, args.effort,
                                 previous["session_id"] if previous else None, mcp_off)
