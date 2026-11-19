@@ -344,6 +344,23 @@ class RunnerTests(unittest.TestCase):
         _, _, other, _ = self.invoke()
         self.assertNotIn(nonce, (other.parent / "prompt.txt").read_text(encoding="utf-8"))
 
+    def test_oversized_prompt_fails_before_launch_and_is_not_stored(self):
+        with patch.object(runner, "execute", wraps=runner.execute) as launch:
+            code, record, path, _ = self.invoke(extra=("--max-prompt-bytes", "100"))
+        self.assertEqual(code, 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertIn("--max-prompt-bytes 100", record["error"])
+        self.assertFalse((path.parent / "prompt.txt").exists())
+        launch.assert_not_called()
+
+    def test_prompt_within_limit_runs_and_nonpositive_limit_is_rejected(self):
+        code, record, _, _ = self.invoke(extra=("--max-prompt-bytes", "1000000"))
+        self.assertEqual((code, record["status"]), (0, "completed"))
+        code, record, _, error = self.invoke(extra=("--max-prompt-bytes", "0"))
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+        self.assertIn("must be positive", error)
+
     def test_missing_feedback_finalizes_created_run_as_failed(self):
         with patch.object(runner, "execute", wraps=runner.execute) as launch:
             code, record, _, _ = self.invoke(extra=("--feedback", str(self.root / "missing.txt")))
