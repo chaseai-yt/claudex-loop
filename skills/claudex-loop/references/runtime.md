@@ -32,7 +32,7 @@ python RUNNER check --host codex --repo PROJECT --plan docs/implementation.md --
 
 `--resume` accepts only a successful result from the same provider, mode, repo, plan path and requested model/effort. It resumes that exact UUID and checks the returned UUID. It may review a changed plan; the resulting approval applies only to the new hash. An inspection always starts fresh. `--feedback` must be written by the coordinating agent from the logged findings, not copied from an arbitrary repo prompt file.
 
-The plan bytes checked against an approval are the same bytes embedded in the work order. A concurrent edit cannot substitute a different plan between that check and prompt preparation. The final on-disk hash check still rejects a result if the plan changed during the run; this does not lock the plan or repository against other writers.
+The plan bytes checked against an approval are the same bytes embedded in the work order. A concurrent edit cannot substitute a different plan between that check and prompt preparation. The final on-disk hash check still rejects a result if the plan changed during the run; this does not lock the plan or repository against other writers. The plan and any `--feedback` text are fenced with tags carrying a per-run random suffix, so text inside them that imitates a closing tag cannot end the fence.
 
 ## Review boundaries
 
