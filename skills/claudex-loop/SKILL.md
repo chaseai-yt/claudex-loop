@@ -26,7 +26,7 @@ Read [the runtime reference](references/runtime.md) before launching a CLI. Reso
 
 If the user supplies `codex_cli` or `claude_cli`, map the selected provider's executable path to `--cli`. A host app can have a newer working binary than the CLI on PATH; verify the path and version without silently changing global installation or configuration.
 
-Grok is an opt-in third reviewer, never a host or builder. Honor `reviewer=grok` or `inspector=grok` by passing `--provider grok` to that `review` or `inspect` call; otherwise keep the default Claude/Codex pairing. Use `--model grok-4.7` with `--effort high`, or `xhigh` for consequential review. Grok runs outside the approved vendors for city work: use it only on personal repositories and personal data, and refuse it for a city repository. Grok reviews read-only, without MCP servers, web search, subagents or Claude/Cursor compatibility sources.
+Grok is an opt-in third reviewer, never a host or builder. Honor `reviewer=grok` or `inspector=grok` by passing `--provider grok` to that `review` or `inspect` call; otherwise keep the default Claude/Codex pairing. Use `--model grok-4.7` with `--effort high`, or `xhigh` for consequential review. Grok runs outside the approved vendors for city work: use it only on personal repositories and personal data, and refuse it for a city repository. Grok reviews read-only, without MCP servers, web search, subagents, memory or Claude/Cursor compatibility sources. The runner refuses a repo Grok trusts, because its own rules, skills and hooks would load; use claude or codex there.
 
 ## Tunables
 

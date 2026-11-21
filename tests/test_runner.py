@@ -55,6 +55,8 @@ if case == 'malformed':
     review = {'verdict':'APPROVED'}
 if '--prompt-file' in sys.argv:
     assert os.environ.get('GROK_CLAUDE_MCPS_ENABLED') == 'false', 'reviewer env not isolated'
+    assert '--no-memory' in sys.argv, 'reviewer memory not off'
+    assert not {'GROK_FOLDER_TRUST', 'GROK_MEMORY'} & set(os.environ), 'trust/memory override inherited'
     value = {'text': json.dumps(review), 'stopReason': 'end_turn', 'sessionId': session,
              'structuredOutput': review, 'modelUsage': {'grok-test': {'inputTokens': 10}}}
     if case == 'turn_failed':
@@ -104,13 +106,14 @@ class RunnerTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", *args], cwd=self.repo, stderr=subprocess.PIPE).decode()
 
-    def invoke(self, host="claude", mode="review", case="ok", extra=()):
+    def invoke(self, host="claude", mode="review", case="ok", extra=(), env=None):
         args = [mode, "--host", host, "--repo", str(self.repo), "--plan", str(self.plan),
                 "--artifacts", str(self.artifacts), *extra]
         old = set(self.artifacts.glob("*/result.json")) if self.artifacts.exists() else set()
         output, error = io.StringIO(), io.StringIO()
         with patch.object(runner, "cli_prefix", return_value=[sys.executable, str(self.cli)]), \
-             patch.dict(os.environ, {"FAKE_CASE": case, "FAKE_PLAN": str(self.plan)}), \
+             patch.dict(os.environ, {"FAKE_CASE": case, "FAKE_PLAN": str(self.plan),
+                                     "GROK_HOME": str(self.root / "grok-home"), **(env or {})}), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
             code = runner.main(args)
         new = set(self.artifacts.glob("*/result.json")) - old if self.artifacts.exists() else set()
@@ -157,6 +160,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(args[args.index("--disallowed-tools")+1], "search_tool,use_tool")
         self.assertEqual(args[args.index("--sandbox")+1], "read-only")
         self.assertIn("--disable-web-search", args)
+        self.assertIn("--no-memory", args)
         self.assertEqual(args[args.index("--resume")+1], SESSION)
         with self.assertRaises(runner.RunError):
             runner.command("grok", "build", self.root)
@@ -166,13 +170,39 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNone(record)
 
     def test_grok_review_and_inspection_complete_with_isolated_env(self):
-        code, record, _, _ = self.invoke(extra=("--provider", "grok"))
+        code, record, _, _ = self.invoke(extra=("--provider", "grok"),
+                                         env={"GROK_FOLDER_TRUST": "0", "GROK_MEMORY": "1"})
         self.assertEqual(code, 0, record)
         self.assertEqual((record["provider"], record["roles"]["reviewer"]), ("grok", "grok"))
         self.assertEqual(record["observed_models"], ["grok-test"])
         code, record, _, _ = self.invoke(mode="inspect", extra=("--provider", "grok", "--base", self.base))
         self.assertEqual(code, 0, record)
         self.assertEqual(record["roles"]["inspector"], "grok")
+
+    @unittest.skipIf(sys.version_info < (3, 11), "Grok trust check reads TOML with tomllib")
+    def test_grok_refuses_a_repo_grok_trusts(self):
+        home = self.root / "grok-home"
+        home.mkdir()
+        store = home / "trusted_folders.toml"
+        cases = {
+            "repo": (f"[folders.'{self.repo}']\ntrusted = true\n", "", False),
+            "parent": (f"[folders.'{self.root}']\ntrusted = true\n", "", False),
+            "revoked": (f"[folders.'{self.repo}']\ntrusted = false\n", "", True),
+            "sibling": (f"[folders.'{self.root / 'repo with'}']\ntrusted = true\n", "", True),
+            "trust_off": ("", "[folder_trust]\nenabled = false\n", False),
+            "malformed": ("[folders.\n", "", False),
+        }
+        for name, (folders, config, allowed) in cases.items():
+            with self.subTest(case=name):
+                store.write_text(folders, encoding="utf-8")
+                (home / "config.toml").write_text(config, encoding="utf-8")
+                code, record, _, error = self.invoke(extra=("--provider", "grok"))
+                if allowed:
+                    self.assertEqual(code, 0, error)
+                else:
+                    self.assertEqual(code, 1)
+                    self.assertIsNone(record)
+                    self.assertIn("Grok", error)
 
     def test_grok_failures_never_approve(self):
         for case in ("exit", "empty", "malformed", "turn_failed"):

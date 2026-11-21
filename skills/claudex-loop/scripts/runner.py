@@ -22,6 +22,8 @@ REVIEWERS = PROVIDERS + ("grok",)
 # Reviewer isolation: no Claude/Cursor-compatible MCP servers, hooks, rules or skills.
 GROK_REVIEW_ENV = {f"GROK_{vendor}_{cell}_ENABLED": "false" for vendor in ("CLAUDE", "CURSOR")
                    for cell in ("AGENTS", "HOOKS", "MCPS", "RULES", "SKILLS")}
+# Inherited values that would ungate folder trust or force memory back on.
+GROK_REVIEW_DROP = ("GROK_FOLDER_TRUST", "GROK_MEMORY")
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -50,6 +52,34 @@ def digest(data: bytes) -> str:
 
 def save(path: Path, value) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def grok_repo_untrusted(repo: Path) -> None:
+    """Refuse a repo Grok trusts: no flag keeps its own rules, skills and hooks out of a run."""
+    home = Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
+    store, config = home / "trusted_folders.toml", home / "config.toml"
+    if not store.exists() and not config.exists():
+        return
+    try:
+        import tomllib
+    except ImportError as exc:
+        raise RunError("Grok review needs Python 3.11+ to check Grok folder trust.") from exc
+    try:
+        folders = tomllib.loads(store.read_text(encoding="utf-8")).get("folders", {}) if store.exists() else {}
+        trust = tomllib.loads(config.read_text(encoding="utf-8")).get("folder_trust", {}) if config.exists() else {}
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise RunError(f"Could not read Grok folder trust under {home}; refusing an unisolated review.") from exc
+    if isinstance(trust, dict) and trust.get("enabled") is False:
+        raise RunError("Grok folder trust is off in config.toml, so every repo's rules, skills and hooks "
+                       "would load into the reviewer. Choose claude or codex.")
+    target = os.path.normcase(str(repo))
+    for folder, entry in folders.items():
+        if not (isinstance(entry, dict) and entry.get("trusted") is True):
+            continue
+        trusted = os.path.normcase(str(Path(folder).resolve()))
+        if target == trusted or target.startswith(trusted.rstrip("\\/") + os.sep):
+            raise RunError(f"Grok trusts {folder}, so this repo's AGENTS.md, skills and hooks would load "
+                           "into the reviewer. Choose claude or codex, or revoke that trust in Grok.")
 
 
 def resolve_roles(host: str, reviewer: str | None = None,
@@ -193,7 +223,8 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
         args = ["--prompt-file", str(run_dir / "prompt.txt"), "--output-format", "json",
                 "--json-schema", json.dumps(REVIEW_SCHEMA, separators=(",", ":")),
                 "--tools", "read_file,grep,list_dir", "--disallowed-tools", "search_tool,use_tool",
-                "--disable-web-search", "--no-subagents", "--sandbox", "read-only", "--no-auto-update"]
+                "--disable-web-search", "--no-subagents", "--sandbox", "read-only", "--no-auto-update",
+                "--no-memory"]
         if session:
             args += ["--resume", session]
         if model:
@@ -333,6 +364,8 @@ def run(args) -> int:
                                  roles["inspector"] if args.mode == "inspect" else roles["reviewer"])
     if provider == "grok" and args.mode == "build":
         raise RunError("Grok reviews and inspects only; choose claude or codex to build.")
+    if provider == "grok" and args.mode in ("review", "inspect"):
+        grok_repo_untrusted(repo)
     if args.mode in ("review", "inspect"):
         roles["reviewer" if args.mode == "review" else "inspector"] = provider
     if args.mode == "review" and provider == args.host:
@@ -424,7 +457,8 @@ def run(args) -> int:
         save(run_dir / "command.json", argv)
         print(json.dumps({"provider": provider, "model": args.model or "CLI default (unresolved)",
                           "mode": args.mode, "artifacts": str(run_dir)}), flush=True)
-        env = {**os.environ, **GROK_REVIEW_ENV} if provider == "grok" else None
+        env = ({**{k: v for k, v in os.environ.items() if k not in GROK_REVIEW_DROP}, **GROK_REVIEW_ENV}
+               if provider == "grok" else None)
         code = execute(argv, prompt, repo, run_dir, args.timeout, env)
         record["exit_code"] = code
         if code:
