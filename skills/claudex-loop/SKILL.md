@@ -66,7 +66,7 @@ Write the resolved `PLAN_FILE` with:
 - Concrete approach, key decisions, trade-offs and non-goals.
 - Confirmed assumptions with sources and remaining risks.
 - Relevant toolchain requirements per provider, if any.
-- Verification: exact proof command(s), expected results, and manual/visual checks when needed.
+- Verification: exact proof command(s), expected results, and manual/visual checks when needed. Prove the change on the real output of the program that produces its input, not only on hand-written samples. When code is replaced, run the old and new code on the same inputs and compare.
 
 Derive proof commands from the repository when possible. Ask only when what counts as success remains unclear. Start the append-only `LOG_FILE` with roles, model requests, scope, authorization and round limits. Keep run diagnostics outside the checkout.
 
@@ -79,8 +79,8 @@ Use the shared runner in `review` mode with the actual `--host`, resolved `--pla
 Each successful response contains a verdict, evidence-backed findings, actual coverage and limitations. Preserve the entire response and runner result path in `LOG_FILE`.
 
 - **APPROVED:** no unresolved material defects. Approval is bound to the exact plan path and SHA256. Present remaining low-priority advice and limitations; zero findings is valid and is not proof of exhaustive correctness.
-- **REVISE:** the host arbitrates each finding. Implement warranted plan changes; reject unsupported suggestions with reasons. Record dispositions and send the revised plan to the same reviewer. Avoid relitigating resolved points without new evidence.
-- **BLOCKED / failed process / malformed result:** never count this as approval. Explain the actual missing evidence or operational failure. Do not burn remaining rounds on blind retries or switch providers silently.
+- **REVISE:** the host arbitrates each finding. Implement warranted plan changes; reject unsupported suggestions with reasons. When a change replaces a behaviour, search the whole plan for the replaced condition and change or mark every passage that still states the old behaviour, acceptance criteria included. Record dispositions and send the revised plan to the same reviewer. Avoid relitigating resolved points without new evidence.
+- **BLOCKED / failed process / malformed result:** never count this as approval. Explain the actual missing evidence or operational failure. Do not burn remaining rounds on blind retries or switch providers silently. If the reviewing provider is out of quota, there is no cross-model fallback: wait for the quota to reset, or let the user choose the recorded unreviewed path below.
 
 Stop at `MAX_ROUNDS`. Present unresolved findings and the host's position instead of manufacturing convergence. A changed plan requires another review. Before building, run the approval check on the final plan. If the user explicitly chooses to proceed without independent approval, record that override and use the standalone unreviewed-spec path; never label it approved.
 
