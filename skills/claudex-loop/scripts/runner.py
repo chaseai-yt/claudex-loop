@@ -210,6 +210,23 @@ def validate_review(value) -> dict:
     return value
 
 
+def codex_windows_sandbox(home: Path | None = None, windows: bool = os.name == "nt") -> str | None:
+    """The user's [windows] sandbox mode, which --ignore-user-config would otherwise drop.
+
+    Without it Codex falls back to a mode that blocks every shell command on some machines,
+    so an isolated reviewer could read nothing. Only this one key is carried over.
+    """
+    if not windows:
+        return None
+    try:
+        import tomllib
+        home = home or Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        mode = tomllib.loads((home / "config.toml").read_text(encoding="utf-8")).get("windows", {}).get("sandbox")
+    except (ImportError, OSError, ValueError, AttributeError):
+        return None
+    return mode if isinstance(mode, str) and mode and all(c.isalnum() or c in "_-" for c in mode) else None
+
+
 def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
             session=None, plan: Path | None = None) -> list[str]:
     review = mode != "build"
@@ -228,6 +245,9 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
             # servers with -c here would fail: the ignored config leaves them half-defined.
             args += ["--ignore-user-config", "-c", 'web_search="disabled"', "--skip-git-repo-check",
                      "--output-schema", str(run_dir / "schema.json")]
+            windows_sandbox = codex_windows_sandbox()
+            if windows_sandbox:
+                args += ["-c", f'windows.sandbox="{windows_sandbox}"']
         if model:
             args += ["-m", model]
         if effort:

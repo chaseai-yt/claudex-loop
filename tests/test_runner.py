@@ -643,6 +643,24 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(any(a.startswith("mcp_servers.") for a in argv))
         self.assertNotIn("disabled_mcp_servers", record)
 
+    def test_codex_windows_sandbox_mode_survives_ignored_config(self):
+        # --ignore-user-config drops [windows] sandbox; without it Windows Codex blocked every read.
+        home = self.root / "codex-home"
+        home.mkdir()
+        config = home / "config.toml"
+        self.assertIsNone(runner.codex_windows_sandbox(home, windows=True))
+        config.write_text('model = "x"\n[windows]\nsandbox = "unelevated"\n', encoding="utf-8")
+        self.assertEqual(runner.codex_windows_sandbox(home, windows=True), "unelevated")
+        self.assertIsNone(runner.codex_windows_sandbox(home, windows=False))
+        for text in ('[windows]\nsandbox = "a\\" -c x="y"\n', "[windows\n", 'windows = "flat"\n'):
+            config.write_text(text, encoding="utf-8")
+            self.assertIsNone(runner.codex_windows_sandbox(home, windows=True), text)
+        with patch.object(runner, "codex_windows_sandbox", return_value="unelevated"):
+            self.assertIn('windows.sandbox="unelevated"', runner.command("codex", "review", self.root))
+            self.assertNotIn('windows.sandbox="unelevated"', runner.command("codex", "build", self.root))
+        with patch.object(runner, "codex_windows_sandbox", return_value=None):
+            self.assertFalse(any(a.startswith("windows.") for a in runner.command("codex", "review", self.root)))
+
     def test_codex_records_effective_settings_from_its_rollout(self):
         # Issue #38: the effective model/effort/sandbox live in Codex's session rollout.
         home = self.root / "codex-home"
