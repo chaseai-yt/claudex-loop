@@ -17,13 +17,19 @@ import uuid
 
 
 PROVIDERS = ("claude", "codex")
-# Grok is an opt-in third reviewer/inspector: never a host or builder.
-REVIEWERS = PROVIDERS + ("grok",)
+# Antigravity can host the loop (calling claude/codex/grok) or serve as an opt-in reviewer/inspector via agy.
+HOSTS = PROVIDERS + ("antigravity",)
+# Grok and Antigravity are opt-in reviewers/inspectors: never delegated builders.
+REVIEWERS = PROVIDERS + ("grok", "antigravity")
 # Reviewer isolation: no Claude/Cursor-compatible MCP servers, hooks, rules or skills.
 GROK_REVIEW_ENV = {f"GROK_{vendor}_{cell}_ENABLED": "false" for vendor in ("CLAUDE", "CURSOR")
                    for cell in ("AGENTS", "HOOKS", "MCPS", "RULES", "SKILLS")}
 # Inherited values that would ungate folder trust or force memory back on.
 GROK_REVIEW_DROP = ("GROK_FOLDER_TRUST", "GROK_MEMORY")
+# Session-only settings denying shell, write, network URL and MCP tools during agy review/inspect.
+ANTIGRAVITY_REVIEW_SETTINGS = {"permissions": {"deny": [
+    "command(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "mcp(*)",
+]}}
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -84,21 +90,24 @@ def grok_repo_untrusted(repo: Path) -> None:
 
 def resolve_roles(host: str, reviewer: str | None = None,
                   builder: str | None = None) -> dict:
-    reviewer = reviewer or next(p for p in PROVIDERS if p != host)
+    if reviewer is None and host in PROVIDERS:
+        reviewer = next(p for p in PROVIDERS if p != host)
     if reviewer == host:
         raise RunError("The plan reviewer must be the other provider. Change the host to swap roles.")
     builder = builder or host
+    inspector = next(p for p in PROVIDERS if p != builder) if builder in PROVIDERS else None
     return {"host": host, "planner": host, "reviewer": reviewer,
-            "builder": builder, "inspector": next(p for p in PROVIDERS if p != builder)}
+            "builder": builder, "inspector": inspector}
 
 
 def cli_prefix(provider: str, override: str | None = None) -> list[str]:
     """Avoid cmd.exe command-string quoting when a Windows npm shim is on PATH."""
     if override and (not Path(override).is_absolute() or not Path(override).is_file()):
         raise RunError("--cli must be an absolute path to an installed CLI executable.")
-    executable = override or shutil.which(provider)
+    binary = "agy" if provider == "antigravity" else provider
+    executable = override or shutil.which(binary)
     if not executable:
-        raise RunError(f"{provider} is not on PATH. Install and authenticate its CLI first.")
+        raise RunError(f"{binary} is not on PATH. Install and authenticate its CLI first.")
     path = Path(executable)
     if os.name == "nt" and path.suffix.lower() in (".cmd", ".bat", ".ps1"):
         entry = {"codex": "@openai/codex/bin/codex.js",
@@ -232,6 +241,24 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
         if effort:
             args += ["--effort", effort]
         return args
+    if provider == "antigravity":
+        if not review:
+            raise RunError("Antigravity reviews and inspects via agy only; build in the host Antigravity "
+                           "session or choose claude/codex to build.")
+        args = ["--output-format", "json",
+                "--json-schema", str(run_dir / "schema.json"),
+                "--mode", "plan", "--sandbox", "--disable-slash-commands",
+                "--settings", json.dumps(ANTIGRAVITY_REVIEW_SETTINGS, separators=(",", ":")),
+                "--add-dir", str(run_dir)]
+        if session:
+            args += ["--conversation", session]
+        if model:
+            args += ["--model", model]
+        if effort:
+            args += ["--effort", effort]
+        args += ["--print", f"Read the complete review prompt in {run_dir / 'prompt.txt'} "
+                            "and return only the requested structured review."]
+        return args
     args = ["-p", "--output-format", "json", "--permission-prompts", "none"]
     if review:
         args += ["--safe-mode", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
@@ -299,6 +326,16 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
         metadata = {"usage": envelope.get("usage"),
                     "observed_models": list(envelope.get("modelUsage", {})),
                     "total_cost_usd": envelope.get("total_cost_usd")}
+    elif provider == "antigravity":
+        envelope = json.loads(stdout)
+        if not isinstance(envelope, dict) or envelope.get("status") != "SUCCESS" or envelope.get("error"):
+            raise RunError("Antigravity did not finish successfully; inspect the captured diagnostics.")
+        session = envelope.get("conversation_id")
+        value = envelope.get("structured_output")
+        if value is None:
+            value = json.loads(envelope.get("response") or "null")
+        metadata = {"usage": envelope.get("usage"),
+                    "observed_models": [envelope["model"]] if envelope.get("model") else []}
     else:
         envelope = json.loads(stdout)
         # Some CLI versions emit an array of init/assistant/result events for JSON.
@@ -362,8 +399,13 @@ def run(args) -> int:
     roles = resolve_roles(args.host, builder=args.builder)
     provider = args.provider or (roles["builder"] if args.mode == "build" else
                                  roles["inspector"] if args.mode == "inspect" else roles["reviewer"])
+    if args.mode in ("review", "inspect") and provider is None:
+        raise RunError("Specify --provider (claude, codex, or grok) when host or builder is antigravity.")
     if provider == "grok" and args.mode == "build":
         raise RunError("Grok reviews and inspects only; choose claude or codex to build.")
+    if provider == "antigravity" and args.mode == "build":
+        raise RunError("Antigravity reviews and inspects via agy only; build in the host Antigravity "
+                       "session or choose claude/codex to build.")
     if provider == "grok" and args.mode in ("review", "inspect"):
         grok_repo_untrusted(repo)
     if args.mode in ("review", "inspect"):
@@ -485,11 +527,11 @@ def run(args) -> int:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("roles", "review", "build", "inspect", "check"))
-    parser.add_argument("--host", required=True, choices=PROVIDERS,
+    parser.add_argument("--host", required=True, choices=HOSTS,
                         help="Actual host of the user conversation; do not infer from installed binaries.")
-    parser.add_argument("--builder", choices=PROVIDERS)
+    parser.add_argument("--builder", choices=HOSTS)
     parser.add_argument("--provider", choices=REVIEWERS,
-                        help="Override the reviewer or inspector; grok is opt-in and never builds.")
+                        help="Override the reviewer or inspector; grok and antigravity are opt-in and never build.")
     parser.add_argument("--repo", default=".")
     parser.add_argument("--plan", default="PLAN.md")
     parser.add_argument("--model", help="Explicit model override; omitted means provider CLI default.")

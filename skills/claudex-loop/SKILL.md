@@ -9,14 +9,15 @@ The current conversation owns requirements, planning and coordination. The other
 
 ## Resolve roles once
 
-Identify the actual host from your runtime, not PATH, installed skills, model-name guesses, or the repository. Both CLIs may be installed. Use `host=claude` in Claude Code and `host=codex` in Codex. If the runtime identity is unavailable, ask which host the user is using once.
+Identify the actual host from your runtime, not PATH, installed skills, model-name guesses, or the repository. Multiple CLIs may be installed. Use `host=claude` in Claude Code, `host=codex` in Codex, and `host=antigravity` in Antigravity. If the runtime identity is unavailable, ask which host the user is using once.
 
 | Host | Requirements and plan | Plan reviewer | Default builder | Final inspector |
 |---|---|---|---|---|
 | Claude Code | Current Claude session | Codex | Claude | Fresh Codex session |
 | Codex | Current Codex session | Claude | Codex | Fresh Claude session |
+| Antigravity | Current Antigravity session | Explicit `--provider claude\|codex\|grok` | Current Antigravity session | Explicit `--provider claude\|codex\|grok` (or opposite of delegated builder) |
 
-Honor `builder=claude|codex`. The inspector is always the other provider. The host remains coordinator even when the other provider builds. To swap the planner, start the conversation in the other host; do not pretend a CLI reviewer is the user's planning conversation.
+Honor `builder=claude|codex` (or `builder=antigravity` when Antigravity is the host and implements directly). The inspector is always another provider. The host remains coordinator even when another provider builds. To swap the planner, start the conversation in the other host; do not pretend a CLI reviewer is the user's planning conversation.
 
 Model selection is independent of provider roles. Preserve the host's selected model. When installed, read `claudex-prefs` and select each delegated role by task difficulty; otherwise use the task-fit guidance in [claudex-route](../claudex-route/SKILL.md). Use Luna for mechanical Codex work; GPT-6.1 Sol or Sonnet 5.5 for bounded builds and routine review; Astra or Opus 5.5 for consequential review and ambiguous work. Reserve Fable 5.1 for explicitly selected, exceptionally demanding work with established access.
 
@@ -24,9 +25,11 @@ Resolve and record `reviewer_model`, `builder_model`, `inspector_model` and each
 
 Read [the runtime reference](references/runtime.md) before launching a CLI. Resolve its runner relative to this installed SKILL.md, never relative to the project being reviewed. Use absolute paths when launching it.
 
-If the user supplies `codex_cli` or `claude_cli`, map the selected provider's executable path to `--cli`. A host app can have a newer working binary than the CLI on PATH; verify the path and version without silently changing global installation or configuration.
+If the user supplies `codex_cli`, `claude_cli`, `grok_cli` or `agy_cli`, map the selected provider's executable path to `--cli`. A host app can have a newer working binary than the CLI on PATH; verify the path and version without silently changing global installation or configuration.
 
 Grok is an opt-in third reviewer, never a host or builder. Honor `reviewer=grok` or `inspector=grok` by passing `--provider grok` to that `review` or `inspect` call; otherwise keep the default Claude/Codex pairing. Use `--model grok-4.7` with `--effort high`, or `xhigh` for consequential review. Grok runs outside the approved vendors for city work: use it only on personal repositories and personal data, and refuse it for a city repository. Grok reviews read-only, without MCP servers, web search, subagents, memory or Claude/Cursor compatibility sources. The runner refuses a repo Grok trusts, because its own rules, skills and hooks would load; use claude or codex there.
+
+Antigravity (`agy`) is also supported as a personal-only host (`--host antigravity`, calling `claude`, `codex`, or `grok`) and as an opt-in reviewer or inspector (`reviewer=antigravity` or `inspector=antigravity`, passing `--provider antigravity` to `review` or `inspect`). Antigravity runs Google models outside the city's approved vendors: use it only on personal repositories and personal data, and refuse it for a city repository. Delegated `build` via `agy` is refused; build in the host Antigravity session or delegate builds to `claude` or `codex`.
 
 ## Tunables
 

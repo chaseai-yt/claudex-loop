@@ -64,6 +64,20 @@ if '--prompt-file' in sys.argv:
     if case == 'malformed':
         value.pop('structuredOutput')
     print(json.dumps(value))
+elif '--mode' in sys.argv and 'plan' in sys.argv:
+    assert '--sandbox' in sys.argv, 'agy sandbox not enabled'
+    assert '--disable-slash-commands' in sys.argv, 'agy slash commands not disabled'
+    settings = json.loads(sys.argv[sys.argv.index('--settings') + 1])
+    denied = set(settings.get('permissions', {}).get('deny', []))
+    assert {'command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)'} <= denied
+    assert '--add-dir' in sys.argv, 'agy missing --add-dir for prompt'
+    value = {'conversation_id': session, 'status': 'SUCCESS', 'response': json.dumps(review),
+             'structured_output': review, 'usage': {'input_tokens': 10, 'output_tokens': 5}}
+    if case == 'turn_failed':
+        value.update(status='ERROR', error='quota exceeded')
+    if case == 'malformed':
+        value.pop('structured_output')
+    print(json.dumps(value))
 elif 'exec' in sys.argv:
     output = pathlib.Path(sys.argv[sys.argv.index('-o')+1])
     output.write_text('Built; proof passed.' if case == 'build' else json.dumps(review))
@@ -208,6 +222,77 @@ class RunnerTests(unittest.TestCase):
         for case in ("exit", "empty", "malformed", "turn_failed"):
             with self.subTest(case=case):
                 code, record, _, _ = self.invoke(case=case, extra=("--provider", "grok"))
+                self.assertEqual(code, 1)
+                self.assertEqual(record["status"], "failed")
+
+    def test_antigravity_host_roles_and_cross_provider_calls(self):
+        roles = runner.resolve_roles("antigravity")
+        self.assertEqual((roles["planner"], roles["reviewer"], roles["builder"], roles["inspector"]),
+                         ("antigravity", None, "antigravity", None))
+        roles = runner.resolve_roles("antigravity", reviewer="claude", builder="codex")
+        self.assertEqual((roles["reviewer"], roles["builder"], roles["inspector"]), ("claude", "codex", "claude"))
+        with self.assertRaises(runner.RunError):
+            runner.resolve_roles("antigravity", "antigravity")
+        code, record, _, error = self.invoke(host="antigravity")
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+        self.assertIn("--provider", error)
+        code, record, _, error = self.invoke(host="antigravity", mode="inspect", extra=("--base", self.base))
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+        self.assertIn("--provider", error)
+        for provider in ("claude", "codex", "grok"):
+            with self.subTest(provider=provider):
+                code, record, _, _ = self.invoke(host="antigravity", extra=("--provider", provider))
+                self.assertEqual(code, 0, record)
+                self.assertEqual((record["provider"], record["roles"]["reviewer"]), (provider, provider))
+                code, record, _, _ = self.invoke(host="antigravity", mode="inspect",
+                                                 extra=("--provider", provider, "--base", self.base))
+                self.assertEqual(code, 0, record)
+                self.assertEqual(record["roles"]["inspector"], provider)
+        code, record, _, _ = self.invoke(host="antigravity", mode="build", case="build",
+                                         extra=("--builder", "codex", "--unreviewed-spec", "--proof", "true"))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["provider"], "codex")
+        code, record, _, error = self.invoke(host="antigravity", mode="build",
+                                             extra=("--unreviewed-spec", "--proof", "true"))
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+        self.assertIn("Antigravity", error)
+
+    def test_antigravity_provider_is_read_only_isolated_and_never_builds(self):
+        args = runner.command("antigravity", "review", self.root, model="gemini-test", effort="high", session=SESSION)
+        self.assertEqual(args[args.index("--mode") + 1], "plan")
+        self.assertIn("--sandbox", args)
+        self.assertIn("--disable-slash-commands", args)
+        self.assertEqual(args[args.index("--conversation") + 1], SESSION)
+        self.assertEqual(args[args.index("--model") + 1], "gemini-test")
+        self.assertEqual(args[args.index("--effort") + 1], "high")
+        settings = json.loads(args[args.index("--settings") + 1])
+        self.assertIn("mcp(*)", settings["permissions"]["deny"])
+        self.assertIn("write_file(*)", settings["permissions"]["deny"])
+        self.assertIn("command(*)", settings["permissions"]["deny"])
+        with self.assertRaises(runner.RunError):
+            runner.command("antigravity", "build", self.root)
+        code, record, _, _ = self.invoke(mode="build", extra=("--provider", "antigravity", "--unreviewed-spec",
+                                                              "--proof", "true"))
+        self.assertEqual(code, 1)
+        self.assertIsNone(record)
+
+    def test_antigravity_provider_review_resume_inspect_and_failures(self):
+        code, record, first, _ = self.invoke(host="claude", case="revise", extra=("--provider", "antigravity"))
+        self.assertEqual(code, 0, record)
+        self.assertEqual((record["provider"], record["roles"]["reviewer"]), ("antigravity", "antigravity"))
+        code, record, _, _ = self.invoke(host="claude", extra=("--provider", "antigravity", "--resume", str(first)))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["session_id"], SESSION)
+        code, record, _, _ = self.invoke(host="codex", mode="inspect",
+                                         extra=("--provider", "antigravity", "--base", self.base))
+        self.assertEqual(code, 0, record)
+        self.assertEqual(record["roles"]["inspector"], "antigravity")
+        for case in ("exit", "empty", "malformed", "turn_failed"):
+            with self.subTest(case=case):
+                code, record, _, _ = self.invoke(case=case, extra=("--provider", "antigravity"))
                 self.assertEqual(code, 1)
                 self.assertEqual(record["status"], "failed")
 
