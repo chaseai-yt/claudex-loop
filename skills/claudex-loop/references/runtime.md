@@ -62,3 +62,17 @@ python RUNNER inspect --host claude --provider grok --repo PROJECT --plan docs/i
 Grok accepts `low`, `medium`, `high` and `xhigh`. The runner gives it `read_file`, `grep` and `list_dir` only, removes MCP tool access, web search and subagents, uses the `read-only` sandbox profile, turns off cross-session memory (`--no-memory`), and turns off Claude/Cursor compatibility scanning for the call. It drops inherited `GROK_FOLDER_TRUST` and `GROK_MEMORY`, which could ungate folder trust or force memory on. Native `~/.grok/config.toml` hooks still load. `build` with `--provider grok` is refused. Resume uses the recorded `sessionId`.
 
 The runner refuses a Grok review or inspection of a repo Grok trusts (the repo or a parent marked `trusted = true` in `$GROK_HOME/trusted_folders.toml`), or when `[folder_trust] enabled = false`. In a trusted folder Grok loads the repo's `AGENTS.md` and `CLAUDE.md`, project skills, project hooks and permission files even with every compatibility cell off (checked with `grok inspect`, Grok 1.0.92), and no flag or `GROK_CONFIG` overlay keeps them out. Use claude or codex there, or revoke the trust in Grok. The check needs Python 3.11+ (`tomllib`); on 3.10 a Grok review fails closed whenever a Grok trust store or config exists.
+
+## Antigravity as host, reviewer, or inspector
+
+```bash
+python RUNNER review --host antigravity --provider codex --repo PROJECT --plan docs/implementation.md --model gpt-6.2-sol --effort high
+python RUNNER review --host antigravity --provider claude --repo PROJECT --plan docs/implementation.md --model claude-sonnet-5-5 --effort high
+python RUNNER review --host antigravity --provider grok --repo PROJECT --plan docs/implementation.md --model grok-4.7 --effort high
+python RUNNER review --host claude --provider antigravity --repo PROJECT --plan docs/implementation.md --effort high
+python RUNNER inspect --host claude --provider antigravity --repo PROJECT --plan docs/implementation.md --base PRE_BUILD_COMMIT --effort high
+```
+
+When `--host antigravity` is used, there is no single opposite provider, so pass `--provider claude|codex|grok` on `review` and when inspecting Antigravity's own edits. When delegating builds from an Antigravity host, pass `--builder claude` or `--builder codex`; `inspect` then defaults to the opposite build provider unless overridden with `--provider`.
+
+When `--provider antigravity` is used, the runner invokes `agy` (or `--cli ABSOLUTE_PATH`) with `--output-format json`, `--json-schema`, `--sandbox`, `--disable-slash-commands`, `--add-dir` for the run directory, and session-only `--settings` denying `command(*)`, `write_file(*)`, `read_url(*)`, `execute_url(*)`, and `mcp(*)` and allowing `read_file` on the plan path. `--mode plan` is not passed: agy ignores it once slash command expansion is off. Headless agy cannot prompt, so a read outside the repo, the run directory and the plan file is auto-denied and ends the turn with no output; the runner reports that as a failed run naming the denied action. Resume passes `--conversation <conversation_id>`. `agy` accepts `low`, `medium`, `high`, `xhigh`, and `max` for `--effort`. Delegated `build` with `antigravity` is refused. Unlike Claude's `--safe-mode` or Codex's `--ignore-user-config`, `agy` does not expose a flag to suppress global or repository `AGENTS.md`/`GEMINI.md` rules or `hooks.json`; treat that boundary explicitly and use `antigravity` only on personal repositories and personal data.
