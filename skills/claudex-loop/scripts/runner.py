@@ -26,10 +26,8 @@ GROK_REVIEW_ENV = {f"GROK_{vendor}_{cell}_ENABLED": "false" for vendor in ("CLAU
                    for cell in ("AGENTS", "HOOKS", "MCPS", "RULES", "SKILLS")}
 # Inherited values that would ungate folder trust or force memory back on.
 GROK_REVIEW_DROP = ("GROK_FOLDER_TRUST", "GROK_MEMORY")
-# Session-only settings denying shell, write, network URL and MCP tools during agy review/inspect.
-ANTIGRAVITY_REVIEW_SETTINGS = {"permissions": {"deny": [
-    "command(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "mcp(*)",
-]}}
+# Session-only rules denying shell, write, network URL and MCP tools during agy review/inspect.
+ANTIGRAVITY_REVIEW_DENY = ["command(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "mcp(*)"]
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -207,7 +205,7 @@ def validate_review(value) -> dict:
 
 
 def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
-            session=None) -> list[str]:
+            session=None, plan: Path | None = None) -> list[str]:
     review = mode != "build"
     if provider == "codex":
         args = ["exec"] + (["resume", session] if session else [])
@@ -245,10 +243,15 @@ def command(provider: str, mode: str, run_dir: Path, model=None, effort=None,
         if not review:
             raise RunError("Antigravity reviews and inspects via agy only; build in the host Antigravity "
                            "session or choose claude/codex to build.")
+        # A headless read outside the workspace is auto-denied and ends the turn with no
+        # output, so the plan file, which may live outside the repo, gets its own read rule.
+        permissions = {"deny": ANTIGRAVITY_REVIEW_DENY}
+        if plan:
+            permissions["allow"] = [f"read_file({plan})"]
         args = ["--output-format", "json",
                 "--json-schema", str(run_dir / "schema.json"),
-                "--mode", "plan", "--sandbox", "--disable-slash-commands",
-                "--settings", json.dumps(ANTIGRAVITY_REVIEW_SETTINGS, separators=(",", ":")),
+                "--sandbox", "--disable-slash-commands",
+                "--settings", json.dumps({"permissions": permissions}, separators=(",", ":")),
                 "--add-dir", str(run_dir)]
         if session:
             args += ["--conversation", session]
@@ -332,10 +335,15 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
             raise RunError("Antigravity did not finish successfully; inspect the captured diagnostics.")
         session = envelope.get("conversation_id")
         value = envelope.get("structured_output")
+        denials = envelope.get("denied_actions") or []
+        if value is None and denials:
+            names = ", ".join(sorted({str(d.get("action")) for d in denials if isinstance(d, dict)}))
+            raise RunError(f"Antigravity auto-denied {names or 'a tool'} and produced no review; "
+                           "a headless read outside the repo and run directory ends the turn.")
         if value is None:
             value = json.loads(envelope.get("response") or "null")
-        metadata = {"usage": envelope.get("usage"),
-                    "observed_models": [envelope["model"]] if envelope.get("model") else []}
+        metadata = {"usage": envelope.get("usage"), "observed_models": [],
+                    "permission_denials": denials}
     else:
         envelope = json.loads(stdout)
         # Some CLI versions emit an array of init/assistant/result events for JSON.
@@ -495,7 +503,7 @@ def run(args) -> int:
         record["cli_version"] = version.stdout.decode("utf-8", errors="replace").strip()
         record["executable"] = prefix
         argv = prefix + command(provider, args.mode, run_dir, args.model, args.effort,
-                                previous["session_id"] if previous else None)
+                                previous["session_id"] if previous else None, plan)
         save(run_dir / "command.json", argv)
         print(json.dumps({"provider": provider, "model": args.model or "CLI default (unresolved)",
                           "mode": args.mode, "artifacts": str(run_dir)}), flush=True)

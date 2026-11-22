@@ -64,12 +64,13 @@ if '--prompt-file' in sys.argv:
     if case == 'malformed':
         value.pop('structuredOutput')
     print(json.dumps(value))
-elif '--mode' in sys.argv and 'plan' in sys.argv:
+elif '--disable-slash-commands' in sys.argv:
     assert '--sandbox' in sys.argv, 'agy sandbox not enabled'
-    assert '--disable-slash-commands' in sys.argv, 'agy slash commands not disabled'
+    assert '--mode' not in sys.argv, 'agy --mode is inert without slash command expansion'
     settings = json.loads(sys.argv[sys.argv.index('--settings') + 1])
     denied = set(settings.get('permissions', {}).get('deny', []))
     assert {'command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)'} <= denied
+    assert settings['permissions']['allow'] == ['read_file(' + os.environ['FAKE_PLAN'] + ')'], 'plan not readable'
     assert '--add-dir' in sys.argv, 'agy missing --add-dir for prompt'
     value = {'conversation_id': session, 'status': 'SUCCESS', 'response': json.dumps(review),
              'structured_output': review, 'usage': {'input_tokens': 10, 'output_tokens': 5}}
@@ -77,6 +78,9 @@ elif '--mode' in sys.argv and 'plan' in sys.argv:
         value.update(status='ERROR', error='quota exceeded')
     if case == 'malformed':
         value.pop('structured_output')
+    if case == 'denied':
+        value.pop('structured_output')
+        value.update(response='', denied_actions=[{'action': 'read_file', 'display_name': 'ReadFile'}])
     print(json.dumps(value))
 elif 'exec' in sys.argv:
     output = pathlib.Path(sys.argv[sys.argv.index('-o')+1])
@@ -261,8 +265,9 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("Antigravity", error)
 
     def test_antigravity_provider_is_read_only_isolated_and_never_builds(self):
-        args = runner.command("antigravity", "review", self.root, model="gemini-test", effort="high", session=SESSION)
-        self.assertEqual(args[args.index("--mode") + 1], "plan")
+        args = runner.command("antigravity", "review", self.root, model="gemini-test", effort="high",
+                              session=SESSION, plan=self.plan)
+        self.assertNotIn("--mode", args)
         self.assertIn("--sandbox", args)
         self.assertIn("--disable-slash-commands", args)
         self.assertEqual(args[args.index("--conversation") + 1], SESSION)
@@ -272,6 +277,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("mcp(*)", settings["permissions"]["deny"])
         self.assertIn("write_file(*)", settings["permissions"]["deny"])
         self.assertIn("command(*)", settings["permissions"]["deny"])
+        self.assertEqual(settings["permissions"]["allow"], [f"read_file({self.plan})"])
         with self.assertRaises(runner.RunError):
             runner.command("antigravity", "build", self.root)
         code, record, _, _ = self.invoke(mode="build", extra=("--provider", "antigravity", "--unreviewed-spec",
@@ -295,6 +301,9 @@ class RunnerTests(unittest.TestCase):
                 code, record, _, _ = self.invoke(case=case, extra=("--provider", "antigravity"))
                 self.assertEqual(code, 1)
                 self.assertEqual(record["status"], "failed")
+        code, record, _, _ = self.invoke(case="denied", extra=("--provider", "antigravity"))
+        self.assertEqual((code, record["status"]), (1, "failed"))
+        self.assertIn("auto-denied read_file", record["error"])
 
     def test_codex_resume_keeps_read_only_and_explicit_session(self):
         args = runner.command("codex", "review", self.root, session=SESSION)
