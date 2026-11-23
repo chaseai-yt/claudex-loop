@@ -381,13 +381,17 @@ def parse_result(provider: str, mode: str, run_dir: Path, expected_session=None)
         envelope = json.loads(stdout)
         if not isinstance(envelope, dict) or envelope.get("stopReason") != "end_turn" or envelope.get("errors"):
             raise RunError("Grok did not finish successfully; inspect the captured diagnostics.")
+        turns = envelope.get("num_turns")
+        if mode != "build" and isinstance(turns, int) and turns < 2:
+            # Seen 2026-11-23: one turn, no file reads, invented line references.
+            raise RunError("Grok answered in one turn without reading anything; treat it as no verdict.")
         session = envelope.get("sessionId")
         value = envelope.get("structuredOutput")
         if value is None:
             value = json.loads(envelope.get("text") or "null")
         metadata = {"usage": envelope.get("usage"),
                     "observed_models": list(envelope.get("modelUsage", {})),
-                    "total_cost_usd": envelope.get("total_cost_usd")}
+                    "total_cost_usd": envelope.get("total_cost_usd"), "num_turns": turns}
     elif provider == "antigravity":
         envelope = json.loads(stdout)
         if not isinstance(envelope, dict) or envelope.get("status") != "SUCCESS" or envelope.get("error"):

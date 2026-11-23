@@ -60,7 +60,8 @@ if '--prompt-file' in sys.argv:
     assert '--no-memory' in sys.argv, 'reviewer memory not off'
     assert not {'GROK_FOLDER_TRUST', 'GROK_MEMORY'} & set(os.environ), 'trust/memory override inherited'
     value = {'text': json.dumps(review), 'stopReason': 'end_turn', 'sessionId': session,
-             'structuredOutput': review, 'modelUsage': {'grok-test': {'inputTokens': 10}}}
+             'structuredOutput': review, 'modelUsage': {'grok-test': {'inputTokens': 10}},
+             'num_turns': 1 if case == 'no_reads' else 6}
     if case == 'turn_failed':
         value.update(stopReason='max_tokens')
     if case == 'malformed':
@@ -195,6 +196,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(code, 0, record)
         self.assertEqual((record["provider"], record["roles"]["reviewer"]), ("grok", "grok"))
         self.assertEqual(record["observed_models"], ["grok-test"])
+        self.assertEqual(record["num_turns"], 6)
         code, record, _, _ = self.invoke(mode="inspect", extra=("--provider", "grok", "--base", self.base))
         self.assertEqual(code, 0, record)
         self.assertEqual(record["roles"]["inspector"], "grok")
@@ -225,7 +227,7 @@ class RunnerTests(unittest.TestCase):
                     self.assertIn("Grok", error)
 
     def test_grok_failures_never_approve(self):
-        for case in ("exit", "empty", "malformed", "turn_failed"):
+        for case in ("exit", "empty", "malformed", "turn_failed", "no_reads"):
             with self.subTest(case=case):
                 code, record, _, _ = self.invoke(case=case, extra=("--provider", "grok"))
                 self.assertEqual(code, 1)
